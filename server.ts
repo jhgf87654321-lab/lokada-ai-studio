@@ -6,9 +6,10 @@ import { fileURLToPath } from "url";
 import COS from "cos-nodejs-sdk-v5";
 import dotenv from "dotenv";
 import fs from "fs";
-import Database from "better-sqlite3";
-
 dotenv.config();
+
+// Vercel serverless 下 better-sqlite3 等 native 模块可能无法运行，改用纯内存缓存
+const isVercel = Boolean(process.env.VERCEL);
 
 const app = express();
 
@@ -39,50 +40,65 @@ type CachedTask = {
 };
 
 // 本地任务缓存：内存 + SQLite（重启后仍可读到结果）
+// Vercel serverless 下 SQLite 不可用，仅用内存
 const taskMemCache = new Map<string, CachedTask>();
-const dataDir = path.join(__dirname, "data");
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-const dbPath = path.join(dataDir, "kie-task-cache.db");
-const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
-db.exec(`
-  CREATE TABLE IF NOT EXISTS kie_task_cache (
-    task_id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,
-    image_url TEXT,
-    error TEXT,
-    updated_at INTEGER NOT NULL,
-    raw_json TEXT
-  );
-`);
+let db: InstanceType<typeof import("better-sqlite3")> | null = null;
+let stmtUpsert: { run: (v: object) => void } | null = null;
+let stmtGet: { get: (id: string) => any } | null = null;
 
-const stmtUpsert = db.prepare(`
-  INSERT INTO kie_task_cache (task_id, status, image_url, error, updated_at, raw_json)
-  VALUES (@task_id, @status, @image_url, @error, @updated_at, @raw_json)
-  ON CONFLICT(task_id) DO UPDATE SET
-    status=excluded.status,
-    image_url=excluded.image_url,
-    error=excluded.error,
-    updated_at=excluded.updated_at,
-    raw_json=excluded.raw_json
-`);
-const stmtGet = db.prepare(`SELECT task_id, status, image_url, error, updated_at, raw_json FROM kie_task_cache WHERE task_id = ?`);
+;(async () => {
+  if (isVercel) return;
+  try {
+    const { default: Database } = await import("better-sqlite3");
+    const dataDir = path.join(__dirname, "data");
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    const dbPath = path.join(dataDir, "kie-task-cache.db");
+    db = new Database(dbPath);
+    db.pragma("journal_mode = WAL");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS kie_task_cache (
+        task_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        image_url TEXT,
+        error TEXT,
+        updated_at INTEGER NOT NULL,
+        raw_json TEXT
+      );
+    `);
+    stmtUpsert = db.prepare(`
+      INSERT INTO kie_task_cache (task_id, status, image_url, error, updated_at, raw_json)
+      VALUES (@task_id, @status, @image_url, @error, @updated_at, @raw_json)
+      ON CONFLICT(task_id) DO UPDATE SET
+        status=excluded.status,
+        image_url=excluded.image_url,
+        error=excluded.error,
+        updated_at=excluded.updated_at,
+        raw_json=excluded.raw_json
+    `);
+    stmtGet = db.prepare(`SELECT task_id, status, image_url, error, updated_at, raw_json FROM kie_task_cache WHERE task_id = ?`);
+  } catch (e) {
+    console.warn("SQLite init failed, using memory cache only:", (e as Error)?.message);
+  }
+})();
 
 function cacheSet(task: CachedTask) {
   taskMemCache.set(task.taskId, task);
-  stmtUpsert.run({
-    task_id: task.taskId,
-    status: task.status,
-    image_url: task.imageUrl ?? null,
-    error: task.error ?? null,
-    updated_at: task.updatedAt,
-    raw_json: task.raw ? JSON.stringify(task.raw) : null,
-  });
+  if (stmtUpsert) {
+    stmtUpsert.run({
+      task_id: task.taskId,
+      status: task.status,
+      image_url: task.imageUrl ?? null,
+      error: task.error ?? null,
+      updated_at: task.updatedAt,
+      raw_json: task.raw ? JSON.stringify(task.raw) : null,
+    });
+  }
 }
 
 function cacheGet(taskId: string): CachedTask | null {
   const mem = taskMemCache.get(taskId);
   if (mem) return mem;
+  if (!stmtGet) return null;
   const row = stmtGet.get(taskId) as any;
   if (!row) return null;
   const parsed: CachedTask = {
@@ -799,13 +815,13 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
+  // Vite middleware for development (Connect 型，用类型断言兼容 Express)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true, port: parseInt(String(PORT)) },
       appType: "spa",
     });
-    app.use(vite.middlewares);
+    app.use(vite.middlewares as express.RequestHandler);
   } else {
     app.use(express.static(path.join(__dirname, "dist")));
     app.get("*", (req, res) => {
