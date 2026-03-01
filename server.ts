@@ -813,7 +813,7 @@ async function startServer() {
     });
   }
 
-  // VERCEL 环境不需要手动启动服务器，它会自动处理
+  // 仅在本机/非 Vercel 环境启动 listen，Vercel 使用导出的 app 作为 handler
   if (!process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
@@ -823,10 +823,8 @@ async function startServer() {
   }
 }
 
-// 只在非 VERCEL 环境启动服务器
-if (!process.env.VERCEL) {
-  startServer();
-}
+// 始终执行 startServer 以注册路由；Vercel 下不执行 listen，由平台调用导出的 handler
+startServer();
 
 // VERCEL Serverless 导出 - 让 VERCEL 可以调用这个 Express 应用
 export { app as handler };

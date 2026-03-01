@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
-    "preview": "vite preview",
+    "build": "npx vite build",
+    "preview": "npx vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "start": "vercel dev"
+    "start": "vercel dev",
+    "deploy": "npm run build && git add -A && git commit -m \"chore: update for Vercel deployment\" && git push origin main"
   },
   "dependencies": {
     "@cloudbase/js-sdk": "^2.25.7",
