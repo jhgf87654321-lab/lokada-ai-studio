@@ -183,7 +183,7 @@ function putObject(params: any): Promise<any> {
 }
 
 async function startServer() {
-  const PORT = process.env.PORT || 3001;
+  const PORT = parseInt(String(process.env.PORT || 3001), 10);
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
