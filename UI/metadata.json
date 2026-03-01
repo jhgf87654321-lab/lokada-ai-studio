@@ -1,0 +1,5 @@
+{
+  "name": "FabricFlow: Clothing Material Library",
+  "description": "A smart clothing material library that uses AI to analyze garments, recommend fabrics, and visualize material replacements.",
+  "requestFramePermissions": []
+}
