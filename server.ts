@@ -1,6 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
-
 import path from "path";
 import { fileURLToPath } from "url";
 import COS from "cos-nodejs-sdk-v5";
@@ -815,8 +813,9 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development (Connect 型，用类型断言兼容 Express)
+  // Vite middleware for development（动态 import 避免 Vercel 上加载 Rollup）
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true, port: parseInt(String(PORT)) },
       appType: "spa",
