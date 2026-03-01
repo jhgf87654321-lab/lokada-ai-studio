@@ -88,9 +88,24 @@ export default function App() {
   useEffect(() => {
     checkLoginStatus();
     fetch("/api/materials")
-      .then((res) => res.json())
-      .then((data) => setMaterials(data))
-      .catch((err) => console.error("Error fetching materials:", err));
+      .then(async (res) => {
+        const text = await res.text();
+        if (!res.ok) {
+          console.warn("Materials API returned", res.status, text.slice(0, 80));
+          return [];
+        }
+        try {
+          return JSON.parse(text) as Material[];
+        } catch {
+          console.warn("Materials API returned non-JSON:", text.slice(0, 80));
+          return [];
+        }
+      })
+      .then((data) => setMaterials(Array.isArray(data) ? data : []))
+      .catch((err) => {
+        console.error("Error fetching materials:", err);
+        setMaterials([]);
+      });
   }, []);
 
   // Poll task status when taskId is set
@@ -439,7 +454,7 @@ export default function App() {
           <path
             key={i}
             className="curve-path"
-            d={`M 0,${50 + i * 100} C 360,${i * 100 - (i % 2 === 0 ? 150 : -150)} 720,${100 + i * 100 + (i % 2 === 0 ? 150 : -150)} 1080,${i * 100 - (i % 2 === 0 ? 150 : -150)} 1440,${50 + i * 100}`}
+            d={`M 0,${50 + i * 100} C 360,${i * 100 - (i % 2 === 0 ? 150 : -150)} 720,${100 + i * 100 + (i % 2 === 0 ? 150 : -150)} 720,${100 + i * 100 + (i % 2 === 0 ? 150 : -150)} C 1080,${i * 100 - (i % 2 === 0 ? 150 : -150)} 1440,${50 + i * 100} 1440,${50 + i * 100}`}
             style={{ animationDelay: `${i * -2.5}s`, animationDuration: `${12 + (i % 3) * 3}s`, opacity: 0.5 + (i * 0.04) }}
           />
         ))}
