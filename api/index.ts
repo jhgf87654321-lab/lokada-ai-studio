@@ -117,6 +117,7 @@ type MaterialMeta = {
   description: string;
   thumbnailKey: string;
   prompt: string;
+  order?: number;
 };
 
 type MaterialsFile = {
@@ -141,9 +142,17 @@ async function loadMaterialsMeta(): Promise<MaterialsFile> {
       return empty;
     }
     const parsed = JSON.parse(text) as MaterialsFile;
+    const list = Array.isArray(parsed.materials) ? parsed.materials : [];
     const normalized: MaterialsFile = {
       version: parsed.version ?? 1,
-      materials: Array.isArray(parsed.materials) ? parsed.materials : [],
+      materials: list.map((m, idx) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description ?? "",
+        thumbnailKey: m.thumbnailKey,
+        prompt: m.prompt,
+        order: typeof m.order === "number" ? m.order : idx,
+      })),
     };
     materialsCache = { data: normalized, loadedAt: now };
     return normalized;
@@ -179,7 +188,8 @@ async function startServer() {
   // 前台使用：从 COS 中读取材质元数据并返回列表
   app.get("/api/materials", async (_, res) => {
     const meta = await loadMaterialsMeta();
-    const list = meta.materials.map((m) => ({
+    const sorted = [...meta.materials].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const list = sorted.map((m) => ({
       id: m.id,
       name: m.name,
       description: m.description,
@@ -227,13 +237,15 @@ async function startServer() {
       return res.status(401).json({ error: "Unauthorized" });
     }
     const meta = await loadMaterialsMeta();
-    const list = meta.materials.map((m) => ({
+    const sorted = [...meta.materials].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const list = sorted.map((m) => ({
       id: m.id,
       name: m.name,
       description: m.description,
       thumbnailKey: m.thumbnailKey,
       thumbnailUrl: COS_BASE_URL + m.thumbnailKey,
       prompt: m.prompt,
+      order: m.order ?? 0,
     }));
     res.json({ version: meta.version, materials: list });
   });
@@ -256,6 +268,7 @@ async function startServer() {
           description: m.description || "",
           thumbnailKey: m.thumbnailKey || "",
           prompt: m.prompt || "",
+          order: typeof m.order === "number" ? m.order : index,
         }));
 
       const meta: MaterialsFile = {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Upload, Sparkles, LogOut, User, ImageIcon, Loader2, Download, Copy, Check, X, ChevronRight } from "lucide-react";
 import { Material, AnalysisResult, PartAnalysis } from "./types";
@@ -46,6 +46,7 @@ interface AdminMaterialRow {
   thumbnailKey: string;
   thumbnailUrl: string;
   prompt: string;
+  order?: number;
 }
 
 export default function App() {
@@ -960,6 +961,7 @@ function AdminMaterials() {
         thumbnailKey: "",
         thumbnailUrl: "",
         prompt: "",
+        order: (old[old.length - 1]?.order ?? old.length) + 1,
       },
     ]);
   };
@@ -1010,6 +1012,7 @@ function AdminMaterials() {
           description: r.description,
           thumbnailKey: r.thumbnailKey,
           prompt: r.prompt,
+          order: r.order,
         })),
       };
       const res = await fetch("/api/admin/materials", {
@@ -1080,6 +1083,7 @@ function AdminMaterials() {
           <thead className="bg-white/5 text-xs uppercase tracking-[0.2em] font-display text-white/60">
             <tr>
               <th className="px-4 py-3 text-left">ID</th>
+              <th className="px-4 py-3 text-left">排序</th>
               <th className="px-4 py-3 text-left">Name</th>
               <th className="px-4 py-3 text-left">Description</th>
               <th className="px-4 py-3 text-left">Thumbnail</th>
@@ -1092,6 +1096,44 @@ function AdminMaterials() {
               <tr key={row.id} className="align-top">
                 <td className="px-4 py-3 text-xs text-white/40 max-w-[160px] break-all">
                   {row.id}
+                </td>
+                <td className="px-4 py-3 w-[80px]">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRows((old) => {
+                          const idx = old.findIndex((r) => r.id === row.id);
+                          if (idx <= 0) return old;
+                          const copy = [...old];
+                          const tmp = copy[idx - 1];
+                          copy[idx - 1] = copy[idx];
+                          copy[idx] = tmp;
+                          return copy.map((r, i) => ({ ...r, order: i }));
+                        })
+                      }
+                      className="px-1 py-0.5 rounded bg-white/5 hover:bg-white/15 text-[10px]"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRows((old) => {
+                          const idx = old.findIndex((r) => r.id === row.id);
+                          if (idx === -1 || idx >= old.length - 1) return old;
+                          const copy = [...old];
+                          const tmp = copy[idx + 1];
+                          copy[idx + 1] = copy[idx];
+                          copy[idx] = tmp;
+                          return copy.map((r, i) => ({ ...r, order: i }));
+                        })
+                      }
+                      className="px-1 py-0.5 rounded bg-white/5 hover:bg-white/15 text-[10px]"
+                    >
+                      ↓
+                    </button>
+                  </div>
                 </td>
                 <td className="px-4 py-3 w-[160px]">
                   <input
