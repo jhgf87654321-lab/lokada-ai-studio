@@ -39,10 +39,19 @@ interface UserInfo {
   nickname?: string;
 }
 
+interface AdminMaterialRow {
+  id: string;
+  name: string;
+  description: string;
+  thumbnailKey: string;
+  thumbnailUrl: string;
+  prompt: string;
+}
+
 export default function App() {
   const MAX_IMAGE_UPLOAD_MB = 10;
   const MAX_IMAGE_UPLOAD_BYTES = MAX_IMAGE_UPLOAD_MB * 1024 * 1024;
-  const [view, setView] = useState<"studio" | "generate">("studio");
+  const [view, setView] = useState<"studio" | "generate" | "admin">("studio");
   const [materials, setMaterials] = useState<Material[]>([]);
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,6 +96,19 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);          // 原图上传
   const referenceInputRef = useRef<HTMLInputElement>(null);     // 参考图上传
+
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // 根据 URL 查询参数决定是否进入管理员模式（?admin=1）
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("admin") === "1") {
+        setIsAdmin(true);
+        setView("admin");
+      }
+    }
+  }, []);
 
   // Check login status and fetch materials on mount
   useEffect(() => {
@@ -499,6 +521,18 @@ export default function App() {
             >
               AI 生图
             </button>
+            {isAdmin && (
+              <button
+                onClick={() => setView("admin")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors font-display tracking-[0.15em] uppercase ${
+                  view === "admin"
+                    ? "bg-amber-500 text-black shadow-md shadow-amber-400/40"
+                    : "bg-white/5 text-amber-300 hover:bg-amber-500/10"
+                }`}
+              >
+                Admin 材质库
+              </button>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -526,7 +560,9 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-auto p-8">
         <div className="max-w-7xl mx-auto h-full relative z-10">
-        {view === "studio" ? (
+        {view === "admin" && isAdmin ? (
+          <AdminMaterials />
+        ) : view === "studio" ? (
           <>
             {/* Hero Title - FabricFlow style */}
             <div className="mb-10 max-w-3xl">
@@ -866,6 +902,267 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function AdminMaterials() {
+  const [rows, setRows] = useState<AdminMaterialRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const adminToken = (import.meta as any).env.VITE_ADMIN_TOKEN as string | undefined;
+
+  useEffect(() => {
+    async function load() {
+      if (!adminToken) {
+        setError("缺少 VITE_ADMIN_TOKEN，无法使用管理员接口。");
+        setLoading(false);
+        return;
+      }
+      try {
+        const res = await fetch("/api/admin/materials", {
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": adminToken,
+          },
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`加载失败: ${res.status} ${text}`);
+        }
+        const data = await res.json();
+        setRows(data.materials || []);
+      } catch (e: any) {
+        setError(e?.message || String(e));
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [adminToken]);
+
+  const handleFieldChange = (id: string, field: keyof AdminMaterialRow, value: string) => {
+    setRows((old) =>
+      old.map((row) => (row.id === id ? { ...row, [field]: value } : row))
+    );
+  };
+
+  const handleAddRow = () => {
+    const id = `material_${Date.now()}`;
+    setRows((old) => [
+      ...old,
+      {
+        id,
+        name: "",
+        description: "",
+        thumbnailKey: "",
+        thumbnailUrl: "",
+        prompt: "",
+      },
+    ]);
+  };
+
+  const handleDeleteRow = (id: string) => {
+    setRows((old) => old.filter((row) => row.id !== id));
+  };
+
+  const handleUploadImage = async (rowId: string, file: File) => {
+    try {
+      const presignRes = await fetch("/api/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, contentType: file.type || "image/jpeg" }),
+      });
+      if (!presignRes.ok) throw new Error("获取上传地址失败");
+      const { uploadUrl, key, url } = await presignRes.json();
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "image/jpeg" },
+        body: file,
+      });
+      if (!uploadRes.ok) throw new Error("上传失败");
+
+      setRows((old) =>
+        old.map((row) =>
+          row.id === rowId ? { ...row, thumbnailKey: key, thumbnailUrl: url } : row
+        )
+      );
+    } catch (e: any) {
+      alert(e?.message || String(e));
+    }
+  };
+
+  const handleSave = async () => {
+    if (!adminToken) {
+      alert("缺少 VITE_ADMIN_TOKEN，无法保存。");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = {
+        materials: rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          description: r.description,
+          thumbnailKey: r.thumbnailKey,
+          prompt: r.prompt,
+        })),
+      };
+      const res = await fetch("/api/admin/materials", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-token": adminToken,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`保存失败: ${res.status} ${text}`);
+      }
+      alert("已保存材质元数据到 COS。");
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="py-12 flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-white" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-2 font-display">
+            Admin
+          </p>
+          <h2 className="text-2xl font-black font-display">材质仓库管理</h2>
+          <p className="text-xs text-white/50 mt-1">
+            仅通过 COS 元数据维护：Name / Description / 缩略图 / Prompt
+          </p>
+        </div>
+        <div className="flex gap-3">
+          <button
+            onClick={handleAddRow}
+            className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold uppercase tracking-[0.2em] font-display"
+          >
+            新增一行
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 rounded-xl bg-brand text-white hover:bg-brand-dark disabled:opacity-50 text-xs font-bold uppercase tracking-[0.2em] font-display shadow-lg shadow-brand/40"
+          >
+            {saving ? "保存中..." : "保存到 COS"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/40 text-xs text-red-200">
+          {error}
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-2xl border border-white/10 bg-black/30">
+        <table className="min-w-full text-sm">
+          <thead className="bg-white/5 text-xs uppercase tracking-[0.2em] font-display text-white/60">
+            <tr>
+              <th className="px-4 py-3 text-left">ID</th>
+              <th className="px-4 py-3 text-left">Name</th>
+              <th className="px-4 py-3 text-left">Description</th>
+              <th className="px-4 py-3 text-left">Thumbnail</th>
+              <th className="px-4 py-3 text-left">Prompt</th>
+              <th className="px-4 py-3 text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {rows.map((row) => (
+              <tr key={row.id} className="align-top">
+                <td className="px-4 py-3 text-xs text-white/40 max-w-[160px] break-all">
+                  {row.id}
+                </td>
+                <td className="px-4 py-3 w-[160px]">
+                  <input
+                    value={row.name}
+                    onChange={(e) => handleFieldChange(row.id, "name", e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-brand"
+                    placeholder="名称"
+                  />
+                </td>
+                <td className="px-4 py-3 w-[220px]">
+                  <textarea
+                    value={row.description}
+                    onChange={(e) => handleFieldChange(row.id, "description", e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-brand resize-none h-20"
+                    placeholder="描述"
+                  />
+                </td>
+                <td className="px-4 py-3 w-[220px]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-16 h-16 rounded-lg border border-white/10 overflow-hidden bg-white/5 flex-shrink-0 flex items-center justify-center">
+                      {row.thumbnailUrl ? (
+                        <img src={row.thumbnailUrl} alt={row.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <ImageIcon className="w-6 h-6 text-white/30" />
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <input
+                        value={row.thumbnailKey}
+                        onChange={(e) => handleFieldChange(row.id, "thumbnailKey", e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-brand"
+                        placeholder="materials/thumbnails/xxx.jpg"
+                      />
+                      <label className="inline-flex items-center gap-2 text-[11px] text-white/60 cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleUploadImage(row.id, file);
+                          }}
+                        />
+                        <span className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 border border-white/10 text-[10px] font-display uppercase tracking-[0.15em]">
+                          上传图片
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3 w-[260px]">
+                  <textarea
+                    value={row.prompt}
+                    onChange={(e) => handleFieldChange(row.id, "prompt", e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-brand resize-none h-20"
+                    placeholder="用于 AI 的材质提示词（英文/中英结合均可）"
+                  />
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    onClick={() => handleDeleteRow(row.id)}
+                    className="inline-flex items-center justify-center px-3 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-[11px] text-red-100 font-display uppercase tracking-[0.15em]"
+                  >
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
