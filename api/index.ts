@@ -7,9 +7,12 @@ import { fileURLToPath } from "url";
 import COS from "cos-nodejs-sdk-v5";
 import dotenv from "dotenv";
 import fs from "fs";
+import { GoogleGenerativeAI } from "@google/genai";
 dotenv.config();
 
 const isVercel = Boolean(process.env.VERCEL);
+const geminiApiKey = process.env.GEMINI_API_KEY || "";
+const gemini = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
 const app = express();
 
 app.use((req, res, next) => {
@@ -132,175 +135,158 @@ async function startServer() {
     }
   });
 
-  app.post("/api/generate", async (req, res) => {
-    try {
-      const { prompt, originalImageUrl } = req.body;
-      const KIE_AI_API_KEY = process.env.KIE_AI_API_KEY;
-      if (!KIE_AI_API_KEY) return res.status(500).json({ error: "KIE_AI_API_KEY not configured" });
-      const requestBody: any = { model: "google/imagen-3-generate-002", input: { prompt, output_format: "png", image_size: "1:1" } };
-      if (originalImageUrl) requestBody.input.image_url = originalImageUrl.startsWith("data:") || originalImageUrl.startsWith("http") ? originalImageUrl : `data:image/jpeg;base64,${originalImageUrl}`;
-      const response = await fetch("https://api.kie.ai/api/v1/jobs/createTask", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${KIE_AI_API_KEY}` }, body: JSON.stringify(requestBody) });
-      if (!response.ok) throw new Error(`Kie.ai error: ${response.status}`);
-      const data = await response.json();
-      res.json({ success: true, taskId: data.data?.taskId || data.data?.recordId, status: "processing" });
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message || "Failed" });
-    }
-  });
-
-  app.get("/api/generate/:id", async (req, res) => {
-    try {
-      const { id } = req.params;
-      const KIE_AI_API_KEY = process.env.KIE_AI_API_KEY;
-      if (!KIE_AI_API_KEY) return res.status(500).json({ error: "KIE_AI_API_KEY not configured" });
-      const response = await fetch(`https://api.kie.ai/api/v1/jobs/${id}`, { headers: { Authorization: `Bearer ${KIE_AI_API_KEY}` } });
-      if (!response.ok) return res.json({ taskId: id, status: "processing" });
-      const data = await response.json();
-      if (data.state === "success" && data.resultJson) {
-        const result = JSON.parse(data.resultJson);
-        res.json({ taskId: id, status: "success", outputUrl: result.resultUrls?.[0] });
-      } else if (data.state === "fail") {
-        res.json({ taskId: id, status: "failed", error: data.failMsg });
-      } else {
-        res.json({ taskId: id, status: "processing" });
-      }
-    } catch {
-      res.json({ taskId: req.params.id, status: "processing" });
-    }
-  });
-
-  app.post("/api/callback", async (req, res) => {
-    try {
-      const body = req.body;
-      const payload = body?.data ? body : { data: body };
-      const data = payload?.data ?? payload;
-      const taskId = data?.taskId || data?.task_id || body?.taskId || body?.task_id;
-      const state = data?.state || data?.status || body?.state || body?.status;
-      const resultJson = data?.resultJson || data?.result_json || body?.resultJson || body?.result_json;
-      if (taskId && String(state).toLowerCase() === "success" && resultJson) {
-        const parsed = typeof resultJson === "string" ? safeJsonParse(resultJson) : resultJson;
-        const imageUrl = extractImageUrlFromResult(parsed);
-        if (imageUrl) cacheSet({ taskId, status: "success", imageUrl, updatedAt: Date.now(), raw: body });
-        else cacheSet({ taskId, status: "failed", error: "No image URL", updatedAt: Date.now(), raw: body });
-      } else if (taskId && (String(state).toLowerCase() === "fail" || String(state).toLowerCase() === "failed")) {
-        cacheSet({ taskId, status: "failed", error: String(data?.failMsg || body?.failMsg || "Failed"), updatedAt: Date.now(), raw: body });
-      } else if (taskId) {
-        cacheSet({ taskId, status: "processing", updatedAt: Date.now(), raw: body });
-      }
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message });
-    }
-  });
-
+  // 使用 Gemini 进行服装分析（gemini-3-flash-preview）
   app.post("/api/analyze", async (req, res) => {
     const { base64Image } = req.body;
     if (!base64Image) return res.status(400).json({ error: "No image provided" });
-    const KIE_AI_API_KEY = process.env.KIE_AI_API_KEY;
-    if (!KIE_AI_API_KEY) return res.status(500).json({ error: "KIE_AI_API_KEY not configured" });
-    const imageData = base64Image.replace(/^data:image\/\w+;base64,/, "");
-    const requestBody = {
-      model: "gemini-3-flash-preview",
-      messages: [{ role: "user", content: [{ type: "text", text: `分析图中人物的服装。将其分为"上装"(top)和"下装"(bottom)两部分分别分析。如果某部分不存在，请在 exists 字段标明。为每一部分推荐3种合适的面料材质。请用 JSON 格式返回，严格包含以下结构：{ "top": { "type": "上装类型", "recommendedMaterials": ["材质1","材质2","材质3"], "reasoning": "推荐理由", "exists": true或false }, "bottom": { "type": "下装类型", "recommendedMaterials": ["材质1","材质2","材质3"], "reasoning": "推荐理由", "exists": true或false }, "overallStyle": "整体风格描述" }` }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageData}` } }] }],
-      stream: false
-    };
+    if (!gemini) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
+
     try {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), 60000);
-      const response = await fetch("https://api.kie.ai/gemini-3-flash/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${KIE_AI_API_KEY}` }, body: JSON.stringify(requestBody), signal: controller.signal });
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      let jsonText = await response.text();
-      if (jsonText.startsWith("{}")) jsonText = jsonText.substring(2);
-      const data = JSON.parse(jsonText);
-      if (data.code && data.code !== 200) throw new Error(data.msg || "Unknown error");
-      let resultText = data.choices?.[0]?.message?.content || "";
-      resultText = resultText.replace(/^```json\s*/, "").replace(/```$/, "").trim();
-      const jsonMatch = resultText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No valid JSON");
-      let result = JSON.parse(jsonMatch[0]);
-      if (result.clothingType && !result.top) {
-        const mats = result.recommendedMaterials || ["棉质", "涤纶", "混纺"];
-        result = { top: { type: result.clothingType, recommendedMaterials: mats, reasoning: result.reasoning || "", exists: true }, bottom: { type: result.clothingType, recommendedMaterials: mats, reasoning: result.reasoning || "", exists: true }, overallStyle: result.clothingType };
-      }
-      res.json(result);
+      const imageData = base64Image.replace(/^data:image\/\w+;base64,/, "");
+      const model = gemini.getGenerativeModel({ model: "gemini-3-flash-preview" });
+
+      const result = await model.generateContent({
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: "image/jpeg",
+                  data: imageData,
+                },
+              },
+              {
+                text:
+                  "分析图中人物的服装，将其分为\"top\"和\"bottom\"两部分分别分析。" +
+                  "如果某部分不存在（例如只穿连衣裙），请在该部分的 exists 字段标记为 false。" +
+                  "为每一部分推荐3种合适的面料材质。" +
+                  "严格按如下 JSON 结构返回（不要包含其它字段）：" +
+                  `{"top":{"type":"上装类型","recommendedMaterials":["材质1","材质2","材质3"],"reasoning":"推荐理由","exists":true或false},"bottom":{"type":"下装类型","recommendedMaterials":["材质1","材质2","材质3"],"reasoning":"推荐理由","exists":true或false},"overallStyle":"整体风格描述"}`,
+              },
+            ],
+          },
+        ],
+      });
+
+      const text = result.response.text();
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No valid JSON in Gemini response");
+      const analysis = JSON.parse(match[0]);
+      res.json(analysis);
     } catch (e) {
-      console.error("Analysis error:", e);
+      console.error("Gemini analyze error:", e);
       res.json({
         top: { type: "上装", recommendedMaterials: ["棉质", "涤纶", "混纺"], reasoning: "AI分析暂时不可用", exists: true },
         bottom: { type: "下装", recommendedMaterials: ["牛仔", "亚麻", "混纺"], reasoning: "AI分析暂时不可用", exists: true },
-        overallStyle: "服装"
+        overallStyle: "服装",
       });
     }
   });
 
-  const KIE_FILE_UPLOAD_URL = "https://kieai.redpandaai.co/api/file-base64-upload";
-  async function uploadBase64ToKie(base64Image: string, apiKey: string): Promise<string> {
-    const base64Data = base64Image.startsWith("data:") ? base64Image : `data:image/jpeg;base64,${base64Image}`;
-    const uploadRes = await fetch(KIE_FILE_UPLOAD_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ base64Data, uploadPath: "replace", fileName: `replace-${Date.now()}.png` }) });
-    if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
-    const text = await uploadRes.text();
-    const uploadJson = JSON.parse(text.startsWith("{}") ? text.substring(2) : text) as any;
-    const url = uploadJson?.data?.fileUrl ?? uploadJson?.data?.downloadUrl ?? uploadJson?.fileUrl ?? uploadJson?.downloadUrl;
-    if (!url) throw new Error("No URL in upload response");
-    return url;
-  }
-
+  // 使用 Gemini 图像模型进行材质替换（gemini-2.5-flash-image）
   app.post("/api/replace", async (req, res) => {
+    const { base64Image, materialPrompt, color } = req.body;
+    if (!base64Image) return res.status(400).json({ error: "No image provided" });
+    if (!materialPrompt) return res.status(400).json({ error: "No material prompt provided" });
+    if (!gemini) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
+
     try {
-      const { base64Image, materialPrompt, color } = req.body;
-      if (!base64Image) return res.status(400).json({ error: "No image provided" });
-      const KIE_AI_API_KEY = process.env.KIE_AI_API_KEY;
-      if (!KIE_AI_API_KEY) return res.status(500).json({ error: "KIE_AI_API_KEY not configured" });
-      const imageUrl = await uploadBase64ToKie(base64Image, KIE_AI_API_KEY);
+      const imageData = base64Image.replace(/^data:image\/\w+;base64,/, "");
       const colorPrefix = color ? `${color}色的 ` : "";
-      const finalPrompt = `将图片中服装的材质替换为${colorPrefix}${materialPrompt}。保持服装的款式、版型和光影效果完全不变，只改变面料材质。`;
-      const requestBody = { model: "nano-banana-pro", callBackUrl: `${process.env.APP_URL || "http://localhost:3001"}/api/callback`, input: { prompt: finalPrompt, image_input: [imageUrl], aspect_ratio: "1:1", resolution: "1K", output_format: "png" } };
-      const response = await fetch("https://api.kie.ai/api/v1/jobs/createTask", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${KIE_AI_API_KEY}` }, body: JSON.stringify(requestBody) });
-      if (!response.ok) throw new Error(`createTask error: ${response.status}`);
-      let jsonText = await response.text();
-      if (jsonText.startsWith("{}")) jsonText = jsonText.substring(2);
-      const data = JSON.parse(jsonText);
-      if (data.code != null && data.code !== 200) throw new Error(data.msg || data.message || "Unknown");
-      const taskId = data?.data?.taskId ?? data?.data?.recordId ?? data?.data?.id ?? data?.taskId ?? data?.recordId ?? data?.id;
-      if (!taskId) throw new Error("No taskId in response");
-      cacheSet({ taskId, status: "pending", updatedAt: Date.now(), raw: {} });
-      res.json({ taskId, status: "pending" });
+      const prompt =
+        `请将图中服装的材质整体替换为${colorPrefix}${materialPrompt}。` +
+        "保持人物的姿态、构图和光影尽量不变，只改变服装面料的质感和颜色，生成高清产品图。";
+
+      const model = gemini.getGenerativeModel({ model: "gemini-2.5-flash-image" });
+      const result = await model.generateContent({
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: imageData,
+              },
+            },
+            { text: prompt },
+          ],
+        },
+      });
+
+      const parts = result.response.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if ((part as any).inlineData) {
+          const data = (part as any).inlineData.data as string;
+          return res.json({ image: `data:image/png;base64,${data}` });
+        }
+      }
+
+      res.status(500).json({ error: "Gemini did not return image data" });
     } catch (e: any) {
-      res.status(500).json({ error: e?.message || "Failed to replace" });
+      console.error("Gemini replace error:", e);
+      res.status(500).json({ error: e?.message || "Failed to replace material" });
     }
   });
 
-  app.get("/api/replace/:taskId", async (req, res) => {
+  // 使用 Gemini 图像模型进行“AI 生图”（可选原图 + 参考图）
+  app.post("/api/generate", async (req, res) => {
+    const { prompt, originalImage, referenceImage } = req.body;
+    if (!prompt && !originalImage && !referenceImage) {
+      return res.status(400).json({ error: "At least prompt or image is required" });
+    }
+    if (!gemini) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
+
     try {
-      const { taskId } = req.params;
-      const KIE_AI_API_KEY = process.env.KIE_AI_API_KEY;
-      if (!KIE_AI_API_KEY) return res.status(500).json({ error: "KIE_AI_API_KEY not configured" });
-      const cached = cacheGet(taskId);
-      if (cached?.status === "success" && cached.imageUrl) return res.json({ status: "success", imageUrl: cached.imageUrl });
-      if (cached?.status === "failed") return res.json({ status: "failed", error: cached.error });
-      const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`, { headers: { Authorization: `Bearer ${KIE_AI_API_KEY}` } });
-      if (!response.ok) return res.json({ status: "processing" });
-      let jsonText = await response.text();
-      if (jsonText.startsWith("{}")) jsonText = jsonText.substring(2);
-      const payload = JSON.parse(jsonText);
-      const data = payload?.data ?? payload;
-      const state = (data?.state ?? "").toLowerCase();
-      if (state === "success" && data?.resultJson) {
-        let result: any = typeof data.resultJson === "string" ? JSON.parse(data.resultJson) : data.resultJson;
-        const url = extractImageUrlFromResult(result);
-        if (url) {
-          cacheSet({ taskId, status: "success", imageUrl: url, updatedAt: Date.now(), raw: payload });
-          return res.json({ status: "success", imageUrl: url });
-        }
-        cacheSet({ taskId, status: "failed", error: "No image URL", updatedAt: Date.now(), raw: payload });
-      } else if (state === "fail") {
-        cacheSet({ taskId, status: "failed", error: String(data?.failMsg || "Failed"), updatedAt: Date.now(), raw: payload });
-        return res.json({ status: "failed", error: data?.failMsg });
+      const parts: any[] = [];
+
+      if (originalImage) {
+        const data = originalImage.replace(/^data:image\/\w+;base64,/, "");
+        parts.push({
+          inlineData: {
+            mimeType: "image/jpeg",
+            data,
+          },
+        });
       }
-      cacheSet({ taskId, status: "processing", updatedAt: Date.now(), raw: payload });
-      res.json({ status: "processing" });
-    } catch {
-      res.json({ status: "processing" });
+
+      if (referenceImage) {
+        const ref = referenceImage.replace(/^data:image\/\w+;base64,/, "");
+        parts.push({
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: ref,
+          },
+        });
+      }
+
+      const finalPrompt =
+        (prompt || "为时尚服装产品生成一张高质量产品图。") +
+        (originalImage && referenceImage
+          ? " 第一张图片是原图，请保持人物、姿态和构图；第二张图片是参考风格图，请在颜色、材质和氛围上尽量靠近它。"
+          : originalImage
+          ? " 请在保持原图人物、姿态和构图的前提下，按文字描述调整风格。"
+          : referenceImage
+          ? " 请参考图片中的风格和氛围，根据文字描述生成新的产品图。"
+          : " 请生成 1:1 构图、光线均匀、细节清晰的产品级效果图。");
+
+      parts.push({ text: finalPrompt });
+
+      const model = gemini.getGenerativeModel({ model: "gemini-2.5-flash-image" });
+      const result = await model.generateContent({
+        contents: { parts },
+      });
+
+      const resultParts = result.response.candidates?.[0]?.content?.parts || [];
+      for (const part of resultParts) {
+        if ((part as any).inlineData) {
+          const data = (part as any).inlineData.data as string;
+          return res.json({ image: `data:image/png;base64,${data}` });
+        }
+      }
+
+      res.status(500).json({ error: "Gemini did not return image data" });
+    } catch (e: any) {
+      console.error("Gemini generate error:", e);
+      res.status(500).json({ error: e?.message || "Failed to generate image" });
     }
   });
 
