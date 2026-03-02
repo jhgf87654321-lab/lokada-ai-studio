@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Upload, Sparkles, LogOut, User, ImageIcon, Loader2, Download, Copy, Check, X, ChevronRight } from "lucide-react";
 import { Material, AnalysisResult, PartAnalysis } from "./types";
-import { analyzeClothing, replaceMaterial } from "./services/geminiService";
+import { analyzeClothing, replaceMaterial, generateImage } from "./services/geminiService";
 
 // CloudBase 认证辅助函数
 async function isCloudbaseLoggedIn(auth: any): Promise<boolean> {
@@ -55,11 +55,12 @@ export default function App() {
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
 
-  // Upload state
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  // Upload state（AI 生图页：原图和参考图都用 base64 存）
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null); // 原图
+  const [referenceImage, setReferenceImage] = useState<string | null>(null); // 参考风格图
   const [uploading, setUploading] = useState(false);
 
-  // Generate state
+  // Generate state（文生图 / 图生图）
   const [prompt, setPrompt] = useState("");
   const [generating, setGenerating] = useState(false);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
@@ -82,7 +83,8 @@ export default function App() {
   const [resultImageLoadError, setResultImageLoadError] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);          // 原图上传
+  const referenceInputRef = useRef<HTMLInputElement>(null);     // 参考图上传
 
   // Check login status and fetch materials on mount
   useEffect(() => {
@@ -246,31 +248,40 @@ export default function App() {
     }
   }
 
+  // AI 生图页原图上传：不再走 COS，直接读为 base64 供 Gemini 使用
   async function handleCOSUpload(file: File) {
     if (!file) return;
     setUploading(true);
     try {
-      const presignResponse = await fetch("/api/upload-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: file.name, contentType: file.type || "image/png" }),
+      await new Promise<void>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const base64 = event.target?.result as string;
+          setUploadedImage(base64);
+          resolve();
+        };
+        reader.onerror = () => reject(new Error("读取图片失败"));
+        reader.readAsDataURL(file);
       });
-      if (!presignResponse.ok) throw new Error("获取上传地址失败");
-      const { uploadUrl, url: finalUrl } = await presignResponse.json();
-      const uploadResponse = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "image/png" },
-        body: file,
-      });
-      if (!uploadResponse.ok) throw new Error("上传失败");
-      setUploadedImage(finalUrl);
     } catch (error: any) {
       console.error("Upload error:", error);
-      alert(`上传失败: ${error.message}`);
+      alert(`上传失败: ${error.message || error}`);
     } finally {
       setUploading(false);
     }
   }
+
+  // 参考风格图上传：同样以 base64 形式保存在前端
+  const handleReferenceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setReferenceImage(base64);
+    };
+    reader.readAsDataURL(file);
+  };
 
   async function handleGenerate() {
     if (!prompt.trim()) return;
@@ -278,21 +289,8 @@ export default function App() {
     setGeneratedImage(null);
     setTaskId(null);
     try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          originalImageUrl: uploadedImage,
-          aspectRatio: "1:1",
-          resolution: "2K",
-          outputFormat: "png",
-          model: "google/imagen-3-generate-002",
-        }),
-      });
-      const data = await response.json();
-      if (data.taskId) setTaskId(data.taskId);
-      else throw new Error(data.error || "创建任务失败");
+      const imageUrl = await generateImage(prompt, uploadedImage || undefined, referenceImage || undefined);
+      setGeneratedImage(imageUrl);
     } catch (error: any) {
       console.error("Generate error:", error);
       alert(`生成失败: ${error.message}`);
@@ -740,8 +738,8 @@ export default function App() {
             {/* Generate View */}
             <div className="bg-white/5 backdrop-blur-2xl rounded-[3rem] p-8 shadow-2xl border border-white/10">
               <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-2 font-display">步骤 01</p>
-              <h2 className="text-lg font-black uppercase font-display text-white mb-6 flex items-center gap-2">
-                <Upload className="w-5 h-5" /> 上传参考图（可选）
+              <h2 className="text-lg font-black uppercase font-display text-white mb-4 flex items-center gap-2">
+                <Upload className="w-5 h-5" /> 上传原图（可选）
               </h2>
               <div onClick={() => fileInputRef.current?.click()} className={`relative aspect-square rounded-[2rem] border-2 border-dashed transition-all cursor-pointer flex items-center justify-center overflow-hidden ${uploadedImage ? 'border-transparent' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
                 {uploading ? (
@@ -756,10 +754,37 @@ export default function App() {
                 )}
               </div>
               <input ref={fileInputRef} type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleCOSUpload(file); }} className="hidden" />
+
+              <div className="mt-8 border-t border-white/10 pt-6">
+                <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-2 font-display">步骤 02</p>
+                <h3 className="text-sm font-black uppercase font-display text-white mb-4 flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4" /> 上传参考风格图（可选）
+                </h3>
+                <div
+                  onClick={() => referenceInputRef.current?.click()}
+                  className={`relative aspect-square rounded-2xl border border-dashed transition-all cursor-pointer flex items-center justify-center overflow-hidden ${referenceImage ? "border-transparent" : "border-white/10 hover:border-white/20 bg-white/5"}`}
+                >
+                  {referenceImage ? (
+                    <img src={referenceImage} alt="Reference" className="w-full h-full object-contain" />
+                  ) : (
+                    <>
+                      <ImageIcon className="w-8 h-8 text-white/40 mb-2" />
+                      <p className="text-xs text-white/60 text-center px-4">可选：上传一张你期望的风格/材质参考图</p>
+                    </>
+                  )}
+                </div>
+                <input
+                  ref={referenceInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleReferenceUpload}
+                  className="hidden"
+                />
+              </div>
             </div>
 
             <div className="bg-white/5 backdrop-blur-2xl rounded-[3rem] p-8 shadow-2xl border border-white/10">
-              <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-2 font-display">步骤 02</p>
+              <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-2 font-display">步骤 03</p>
               <h2 className="text-lg font-black uppercase font-display text-white mb-6 flex items-center gap-2">
                 <Sparkles className="w-5 h-5" /> AI 生图
               </h2>

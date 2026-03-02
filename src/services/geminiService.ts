@@ -1,9 +1,10 @@
+import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult } from "../types";
 
-/** 将大图压缩为较小 data URL，减少请求体体积，避免 fetch 因体积/超时失败 */
+/** 将大图压缩为较小 data URL，减少请求体体积，避免请求过大或超时 */
 async function compressImageForUpload(dataUrl: string, maxSizePx = 1200, quality = 0.82): Promise<string> {
   if (dataUrl.length < 1_200_000) return dataUrl; // 约 1.2MB 以下不压缩
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
@@ -41,104 +42,190 @@ async function compressImageForUpload(dataUrl: string, maxSizePx = 1200, quality
   });
 }
 
-// 通过后端 API 调用 Google Gemini 进行服装分析
-export async function analyzeClothing(base64Image: string): Promise<AnalysisResult> {
-  const response = await fetch("/api/analyze", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ base64Image }),
-  });
+// 使用浏览器直接调用 Google Gemini（需要在环境中配置 GEMINI_API_KEY）
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-  if (!response.ok) {
-    throw new Error(`Analysis failed: ${response.statusText}`);
+// 直接调用 Gemini 进行服装分析（gemini-3-flash-preview）
+export async function analyzeClothing(base64Image: string): Promise<AnalysisResult> {
+  if (!ai) {
+    throw new Error("Gemini 客户端未初始化，请检查 GEMINI_API_KEY 环境变量。");
   }
 
-  const result = await response.json();
-  return result;
+  const compressed = await compressImageForUpload(base64Image);
+  const imageData = compressed.split(",")[1] || base64Image.split(",")[1];
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: [
+      {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: imageData,
+            },
+          },
+          {
+            text:
+              "分析图中人物的服装。将其分为“上装”(top)和“下装”(bottom)两部分分别分析。" +
+              "如果某部分不存在（例如只穿了连衣裙，连衣裙可归为上装，下装设为不存在），请在 exists 字段标明。" +
+              "为每一部分推荐3种合适的面料材质。以 JSON 格式返回结果。",
+          },
+        ],
+      },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          top: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING, description: "上装类型" },
+              recommendedMaterials: { type: Type.ARRAY, items: { type: Type.STRING }, description: "推荐材质" },
+              reasoning: { type: Type.STRING, description: "推荐理由" },
+              exists: { type: Type.BOOLEAN, description: "是否存在" },
+            },
+          },
+          bottom: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING, description: "下装类型" },
+              recommendedMaterials: { type: Type.ARRAY, items: { type: Type.STRING }, description: "推荐材质" },
+              reasoning: { type: Type.STRING, description: "推荐理由" },
+              exists: { type: Type.BOOLEAN, description: "是否存在" },
+            },
+          },
+          overallStyle: { type: Type.STRING, description: "整体风格" },
+        },
+        required: ["top", "bottom", "overallStyle"],
+      },
+    },
+  });
+
+  const text = response.text || "{}";
+  return JSON.parse(text) as AnalysisResult;
 }
 
-// 通过后端 API 调用 Kie.ai 进行材质替换（图生图）
+// 使用 Gemini 图像模型进行材质替换（gemini-2.5-flash-image）
 export async function replaceMaterial(
   base64Image: string,
   materialPrompt: string,
   color?: string
 ): Promise<string> {
-  try {
-    // 大图先压缩再上传，减小请求体，降低「fetch failed」概率
-    const payloadImage = await compressImageForUpload(base64Image);
+  if (!ai) {
+    throw new Error("Gemini 客户端未初始化，请检查 GEMINI_API_KEY 环境变量。");
+  }
 
-    // 创建材质替换任务，后端会组装最终提示词并处理图片
-    const response = await fetch("/api/replace", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  // 压缩原图，减少上传体积
+  const compressed = await compressImageForUpload(base64Image);
+  const imageData = compressed.split(",")[1] || base64Image.split(",")[1];
+
+  const colorPrefix = color ? `${color}色的 ` : "";
+  const prompt =
+    `请将图中人物服装的材质整体替换为${colorPrefix}${materialPrompt}。` +
+    "保持服装的款式、版型和光影效果基本不变，只改变面料材质，呈现高清产品图效果。";
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-image",
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: imageData,
+            },
+          },
+          {
+            text: prompt,
+          },
+        ],
       },
-      body: JSON.stringify({
-        base64Image: payloadImage,
-        materialPrompt,
-        color,
-      }),
     });
 
-    if (!response.ok) {
-      // 尝试从后端返回的 JSON 中提取具体错误信息
-      const text = await response.text();
-      let message = `Replace failed: ${response.status} ${response.statusText}`;
-      try {
-        const data = JSON.parse(text);
-        if (data?.error) {
-          message = data.error;
-        }
-      } catch {
-        // 不是 JSON，就保留默认 message
+    const parts = response.candidates?.[0]?.content?.parts || [];
+    for (const part of parts) {
+      if ((part as any).inlineData) {
+        const inline = (part as any).inlineData as { data: string };
+        return `data:image/png;base64,${inline.data}`;
       }
-      throw new Error(message);
     }
 
-    const result = await response.json();
-    console.log("Replace task result:", result);
-
-    // 如果返回了 taskId，轮询查询状态（Kie 图生图可能需 1～2 分钟）
-    if (result.taskId) {
-      const maxAttempts = 60;   // 最多 60 次
-      const intervalMs = 2000;  // 每 2 秒一次，总计约 120 秒
-      for (let i = 0; i < maxAttempts; i++) {
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
-
-        try {
-          const statusResponse = await fetch(`/api/replace/${result.taskId}`);
-          if (statusResponse.ok) {
-            const statusResult = await statusResponse.json();
-            if (i % 10 === 0) console.log("Replace status attempt", i + 1, statusResult);
-
-            if (statusResult.status === "success" && statusResult.imageUrl) {
-              return statusResult.imageUrl;
-            } else if (statusResult.status === "failed") {
-              throw new Error(`Image generation failed: ${statusResult.error}`);
-            }
-            // 处理中，继续轮询
-          }
-        } catch (e) {
-          if (e instanceof Error && e.message.startsWith("Image generation failed")) throw e;
-          console.warn("Polling error:", e);
-        }
-      }
-      throw new Error("Image generation timeout (waited ~2min). 后台可能已生成，请稍后在 KIE 后台查看或重试。");
-    }
-
-    throw new Error("No task ID returned from /api/replace");
+    throw new Error("Gemini 没有返回图像数据");
   } catch (error: any) {
-    console.error("Replace material error:", error);
+    console.error("Replace material error (Gemini):", error);
     const rawMsg = error?.message ?? String(error);
-    // 网络层失败时给出可操作提示
-    if (/fetch failed|Failed to fetch|NetworkError|Load failed|ECONNREFUSED/i.test(rawMsg)) {
-      throw new Error(
-        "网络请求失败：请确认在项目根目录运行了 npm run dev，并通过 http://localhost:3001 打开页面；若仍失败可换一张较小图片重试。"
-      );
+    throw new Error(rawMsg || "材质替换失败，请稍后重试。");
+  }
+}
+
+// 使用 Gemini 生成/扩图（gemini-2.5-flash-image），用于“AI生成新图”页面
+// originalImage: 原图（保持人物/构图）；referenceImage: 参考风格图（颜色/材质/氛围）
+export async function generateImage(
+  prompt: string,
+  originalImage?: string,
+  referenceImage?: string
+): Promise<string> {
+  if (!ai) {
+    throw new Error("Gemini 客户端未初始化，请检查 GEMINI_API_KEY 环境变量。");
+  }
+
+  const parts: any[] = [];
+
+  if (originalImage) {
+    const compressed = await compressImageForUpload(originalImage);
+    const imageData = compressed.split(",")[1] || originalImage.split(",")[1];
+    parts.push({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: imageData,
+      },
+    });
+  }
+
+  if (referenceImage) {
+    const compressedRef = await compressImageForUpload(referenceImage);
+    const refData = compressedRef.split(",")[1] || referenceImage.split(",")[1];
+    parts.push({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: refData,
+      },
+    });
+  }
+
+  const finalPrompt =
+    (prompt || "为时尚服装产品生成一张高质量产品图。") +
+    (originalImage && referenceImage
+      ? " 第一张图片是原图，请保持人物、姿态和构图；第二张图片是参考风格图，请尽量在颜色、材质和整体氛围上向其靠近。"
+      : originalImage
+      ? " 请在保持原图人物、姿态和构图的前提下，按文字描述调整风格。"
+      : referenceImage
+      ? " 请参考图片中的风格和氛围，根据文字描述生成一张新的产品图。"
+      : " 请生成 1:1 构图、光线均匀、细节清晰的产品级效果图。");
+
+  parts.push({ text: finalPrompt });
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-image",
+      contents: { parts },
+    });
+
+    const resultParts = response.candidates?.[0]?.content?.parts || [];
+    for (const part of resultParts) {
+      if ((part as any).inlineData) {
+        const inline = (part as any).inlineData as { data: string };
+        return `data:image/png;base64,${inline.data}`;
+      }
     }
-    if (error instanceof Error) throw error;
-    throw new Error(String(error));
+
+    throw new Error("Gemini 没有返回生成的图像数据");
+  } catch (error: any) {
+    console.error("Generate image error (Gemini):", error);
+    const rawMsg = error?.message ?? String(error);
+    throw new Error(rawMsg || "生成图片失败，请稍后重试。");
   }
 }
