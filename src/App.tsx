@@ -440,7 +440,15 @@ export default function App() {
   };
 
   const handleRecommendClick = (matName: string, part: "top" | "bottom") => {
-    const match = materials.find(m => m.name.includes(matName) || matName.includes(m.name) || m.type.includes(matName));
+    const match = materials.find((m) => {
+      const name = m.name || "";
+      const type = (m as any).type ? String((m as any).type) : "";
+      return (
+        (name && name.includes(matName)) ||
+        (matName && matName.includes(name)) ||
+        (type && type.includes(matName))
+      );
+    });
     if (part === "top") {
       setTopCustomMaterial(matName);
       setTopMaterial(match || null);
