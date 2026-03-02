@@ -7,12 +7,12 @@ import { fileURLToPath } from "url";
 import COS from "cos-nodejs-sdk-v5";
 import dotenv from "dotenv";
 import fs from "fs";
-import { GoogleGenerativeAI } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 dotenv.config();
 
 const isVercel = Boolean(process.env.VERCEL);
 const geminiApiKey = process.env.GEMINI_API_KEY || "";
-const gemini = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
+const gemini = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
 const app = express();
 
 app.use((req, res, next) => {
@@ -143,9 +143,9 @@ async function startServer() {
 
     try {
       const imageData = base64Image.replace(/^data:image\/\w+;base64,/, "");
-      const model = gemini.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
-      const result = await model.generateContent({
+      const result = await gemini.models.generateContent({
+        model: "gemini-3-flash-preview",
         contents: [
           {
             parts: [
@@ -166,12 +166,13 @@ async function startServer() {
             ],
           },
         ],
+        config: {
+          responseMimeType: "application/json",
+        },
       });
 
-      const text = result.response.text();
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No valid JSON in Gemini response");
-      const analysis = JSON.parse(match[0]);
+      const text = result.text || "{}";
+      const analysis = JSON.parse(text);
       res.json(analysis);
     } catch (e) {
       console.error("Gemini analyze error:", e);
@@ -197,8 +198,8 @@ async function startServer() {
         `请将图中服装的材质整体替换为${colorPrefix}${materialPrompt}。` +
         "保持人物的姿态、构图和光影尽量不变，只改变服装面料的质感和颜色，生成高清产品图。";
 
-      const model = gemini.getGenerativeModel({ model: "gemini-2.5-flash-image" });
-      const result = await model.generateContent({
+      const result = await gemini.models.generateContent({
+        model: "gemini-2.5-flash-image",
         contents: {
           parts: [
             {
@@ -212,7 +213,7 @@ async function startServer() {
         },
       });
 
-      const parts = result.response.candidates?.[0]?.content?.parts || [];
+      const parts = result.candidates?.[0]?.content?.parts || [];
       for (const part of parts) {
         if ((part as any).inlineData) {
           const data = (part as any).inlineData.data as string;
@@ -270,12 +271,12 @@ async function startServer() {
 
       parts.push({ text: finalPrompt });
 
-      const model = gemini.getGenerativeModel({ model: "gemini-2.5-flash-image" });
-      const result = await model.generateContent({
+      const result = await gemini.models.generateContent({
+        model: "gemini-2.5-flash-image",
         contents: { parts },
       });
 
-      const resultParts = result.response.candidates?.[0]?.content?.parts || [];
+      const resultParts = result.candidates?.[0]?.content?.parts || [];
       for (const part of resultParts) {
         if ((part as any).inlineData) {
           const data = (part as any).inlineData.data as string;
