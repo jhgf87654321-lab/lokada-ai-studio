@@ -40,6 +40,8 @@ interface UserInfo {
 }
 
 export default function App() {
+  const MAX_IMAGE_UPLOAD_MB = 10;
+  const MAX_IMAGE_UPLOAD_BYTES = MAX_IMAGE_UPLOAD_MB * 1024 * 1024;
   const [view, setView] = useState<"studio" | "generate">("studio");
   const [materials, setMaterials] = useState<Material[]>([]);
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -251,6 +253,10 @@ export default function App() {
   // AI 生图页原图上传：不再走 COS，直接读为 base64 供 Gemini 使用
   async function handleCOSUpload(file: File) {
     if (!file) return;
+    if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+      alert(`图片过大（>${MAX_IMAGE_UPLOAD_MB}MB），请压缩后再上传。`);
+      return;
+    }
     setUploading(true);
     try {
       await new Promise<void>((resolve, reject) => {
@@ -275,6 +281,10 @@ export default function App() {
   const handleReferenceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+      alert(`参考图过大（>${MAX_IMAGE_UPLOAD_MB}MB），请压缩后再上传。`);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64 = event.target?.result as string;
@@ -301,6 +311,10 @@ export default function App() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+        setError(`图片过大（>${MAX_IMAGE_UPLOAD_MB}MB），请压缩后再上传。`);
+        return;
+      }
       const reader = new FileReader();
       reader.onload = async (event) => {
         const base64 = event.target?.result as string;
