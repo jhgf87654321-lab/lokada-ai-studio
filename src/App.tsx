@@ -98,6 +98,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);          // 原图上传
   const referenceInputRef = useRef<HTMLInputElement>(null);     // 参考图上传
   const generateSectionRef = useRef<HTMLDivElement | null>(null); // AI 生图区域（用于滚动）
+  const studioResultBottomRef = useRef<HTMLDivElement | null>(null); // Studio 结果区域（手机端滚动）
 
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -120,6 +121,17 @@ export default function App() {
       }
     }
   }, [view]);
+
+  // Studio：生成结果后，手机端自动滚到页面底部（步骤 05）
+  useEffect(() => {
+    if (!resultImage) return;
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      // 等图片容器渲染后再滚动，避免跳不到正确位置
+      setTimeout(() => {
+        studioResultBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 50);
+    }
+  }, [resultImage]);
 
   // Check login status and fetch materials on mount
   useEffect(() => {
@@ -657,8 +669,9 @@ export default function App() {
                   )}
                 </AnimatePresence>
 
+                {/* Studio 生成结果：桌面端在左列显示；手机端挪到页面底部 */}
                 {resultImage && (
-                  <motion.section initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white/5 backdrop-blur-2xl rounded-[3rem] pt-8 pb-4 px-10 shadow-2xl border border-white/10 relative overflow-hidden group">
+                  <motion.section initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="hidden lg:block bg-white/5 backdrop-blur-2xl rounded-[3rem] pt-8 pb-4 px-10 shadow-2xl border border-white/10 relative overflow-hidden group">
                     <div className="flex justify-between items-start mb-4">
                       <div>
                         <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-1 font-display drop-shadow-[0_0_15px_rgba(106,56,176,1)]">步骤 05</p>
@@ -804,6 +817,59 @@ export default function App() {
                   </div>
                 </section>
               </div>
+
+              {/* Studio 生成结果：手机端显示在最下方，并支持自动滚动 */}
+              {resultImage && (
+                <div ref={studioResultBottomRef} className="lg:hidden">
+                  <motion.section
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="bg-white/5 backdrop-blur-2xl rounded-[2rem] pt-6 pb-4 px-5 shadow-2xl border border-white/10 relative overflow-hidden"
+                  >
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <p className="text-[12px] font-black uppercase tracking-[0.3em] text-brand mb-1 font-display drop-shadow-[0_0_15px_rgba(106,56,176,1)]">步骤 05</p>
+                        <h3 className="text-base font-black font-display uppercase text-white">生成结果</h3>
+                      </div>
+                    </div>
+                    <div className="aspect-[16/10] rounded-2xl overflow-hidden bg-white/5 flex items-center justify-center border border-white/10 relative">
+                      {resultImageLoadError ? (
+                        <div className="flex flex-col gap-2 text-center text-sm text-white/60 p-4">
+                          <p>图片加载失败（可能因外链限制）</p>
+                          <a href={resultImage} target="_blank" rel="noopener noreferrer" className="text-brand font-bold underline">
+                            在新标签页打开查看
+                          </a>
+                        </div>
+                      ) : (
+                        <img
+                          src={resultImage}
+                          alt="Result"
+                          className="w-full h-full object-contain"
+                          referrerPolicy="no-referrer"
+                          onError={() => setResultImageLoadError(true)}
+                        />
+                      )}
+                    </div>
+                    <div className="flex gap-3 mt-4">
+                      <a
+                        href={resultImage}
+                        download="lokada-design.png"
+                        className="flex-1 flex items-center justify-center gap-2 py-3 bg-brand text-white rounded-xl transition-colors font-display text-xs uppercase tracking-wider shadow-lg shadow-brand/40"
+                      >
+                        <Download className="w-4 h-4" />
+                        下载
+                      </a>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(resultImage)}
+                        className="flex-1 flex items-center justify-center gap-2 py-3 bg-white/10 hover:bg-white/20 rounded-xl transition-colors font-display text-xs uppercase tracking-wider"
+                      >
+                        <Copy className="w-4 h-4" />
+                        复制
+                      </button>
+                    </div>
+                  </motion.section>
+                </div>
+              )}
             </div>
           </>
         ) : (
