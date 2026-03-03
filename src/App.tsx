@@ -97,6 +97,7 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);          // 原图上传
   const referenceInputRef = useRef<HTMLInputElement>(null);     // 参考图上传
+  const generateSectionRef = useRef<HTMLDivElement | null>(null); // AI 生图区域（用于滚动）
 
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -110,6 +111,15 @@ export default function App() {
       }
     }
   }, []);
+
+  // 当切换到 AI 生图视图时，在手机端自动滚动到生图区域
+  useEffect(() => {
+    if (view === "generate" && typeof window !== "undefined" && window.innerWidth < 768) {
+      if (generateSectionRef.current) {
+        generateSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+  }, [view]);
 
   // Check login status and fetch materials on mount
   useEffect(() => {
@@ -689,7 +699,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-6 overflow-y-auto max-h-[500px] pr-4 custom-scrollbar mb-10">
+                  <div className="grid grid-cols-2 gap-4 md:gap-6 overflow-y-auto max-h-[500px] pr-2 md:pr-4 custom-scrollbar mb-8 md:mb-10">
                     {materials.map((material) => {
                       const isSelected = activePart === "top" ? topMaterial?.id === material.id : bottomMaterial?.id === material.id;
                       return (
@@ -706,14 +716,18 @@ export default function App() {
                               setBottomCustomMaterial(null);
                             }
                           }}
-                          className={`group relative rounded-[2rem] border-2 transition-all cursor-pointer overflow-hidden ${isSelected ? "border-brand bg-brand/10" : "border-white/5 hover:border-brand/30 bg-white/5"}`}
+                          className={`group relative rounded-[1.75rem] md:rounded-[2rem] border-2 transition-all cursor-pointer overflow-hidden ${isSelected ? "border-brand bg-brand/10" : "border-white/5 hover:border-brand/30 bg-white/5"}`}
                         >
                           <div className="aspect-square overflow-hidden">
                             <img src={material.thumbnail_url} alt={material.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" referrerPolicy="no-referrer" />
                           </div>
-                          <div className="p-4">
-                            <p className="text-xs font-black uppercase font-display truncate text-white">{material.name}</p>
-                            <p className="text-[9px] text-white/30 font-bold uppercase tracking-widest">{material.type}</p>
+                          <div className="p-3 md:p-4 space-y-1">
+                            <p className="text-[11px] md:text-xs font-black uppercase font-display truncate text-white">{material.name}</p>
+                            {material.description && (
+                              <p className="text-[10px] md:text-[11px] text-white/40 leading-snug line-clamp-2 md:line-clamp-3">
+                                {material.description}
+                              </p>
+                            )}
                           </div>
                           {isSelected && (
                             <div className="absolute top-3 right-3 w-6 h-6 bg-brand rounded-full flex items-center justify-center shadow-lg shadow-brand/40">
@@ -793,7 +807,7 @@ export default function App() {
             </div>
           </>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8" ref={generateSectionRef}>
             {/* Generate View */}
             <div className="bg-white/5 backdrop-blur-2xl rounded-[3rem] p-8 shadow-2xl border border-white/10">
               <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand mb-2 font-display">步骤 01</p>
