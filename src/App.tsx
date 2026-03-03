@@ -503,7 +503,7 @@ export default function App() {
         ))}
       </svg>
       {/* Header */}
-      <header className="bg-[#050505]/60 border-b border-white/10 px-8 py-4 flex justify-between items-center flex-shrink-0 backdrop-blur-2xl">
+      <header className="bg-[#050505]/60 border-b border-white/10 px-4 py-3 md:px-8 md:py-4 flex justify-between items-center flex-shrink-0 backdrop-blur-2xl">
         <div className="flex items-center gap-4">
           <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center shadow-lg shadow-brand/40">
             <Sparkles className="text-white w-5 h-5" />
@@ -567,7 +567,7 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto p-8">
+      <main className="flex-1 overflow-auto px-4 py-6 md:p-8">
         <div className="max-w-7xl mx-auto h-full relative z-10">
         {view === "admin" && isAdmin ? (
           <AdminMaterials />
