@@ -221,7 +221,7 @@ async function startServer() {
     try {
       let buffer: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ""));
       if (buffer.length === 0) return res.status(400).json({ error: "上传内容为空" });
-      if (buffer.length > 5 * 1024 * 1024) return res.status(400).json({ error: "文件大小不能超过 5MB" });
+      if (buffer.length > 10 * 1024 * 1024) return res.status(400).json({ error: "文件大小不能超过 10MB" });
       const key = `uploads/upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
       const result = await putObject({ Bucket, Region, Key: key, Body: buffer, ContentLength: buffer.length, ContentType: req.headers["content-type"] || "image/png", ACL: "public-read" });
       const url = (result.Location || "").startsWith("http") ? result.Location : `https://${result.Location}`;
