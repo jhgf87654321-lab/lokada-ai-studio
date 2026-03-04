@@ -96,6 +96,7 @@ export default function App() {
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [resultImageLoadError, setResultImageLoadError] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pantoneCoatedMap, setPantoneCoatedMap] = useState<Record<string, string>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);          // 原图上传
   const referenceInputRef = useRef<HTMLInputElement>(null);     // 参考图上传
@@ -154,6 +155,22 @@ export default function App() {
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
+  }, []);
+
+  // 加载完整 Pantone C 数据集（数字+C 全部支持）
+  useEffect(() => {
+    fetch("https://raw.githubusercontent.com/brettapeters/pantones/master/pantone-coated.json")
+      .then((r) => r.json())
+      .then((arr: { pantone: string; hex: string }[]) => {
+        const m: Record<string, string> = {};
+        arr.forEach(({ pantone, hex }) => {
+          const key = pantone.toLowerCase().replace(/\s/g, "");
+          m[key] = hex;
+          m[key.replace("-", "")] = hex;
+        });
+        setPantoneCoatedMap(m);
+      })
+      .catch(() => {});
   }, []);
 
   // Check login status and fetch materials on mount
@@ -507,9 +524,11 @@ export default function App() {
     }
   };
 
-  // Pantone 编号/名称 → hex 映射（mpfff.icu 常用 + 常见 Pantone C）
+  // Pantone 编号/名称 → hex 映射（mpfff.icu 常用 + 常见 Pantone C，支持 293C / 293 C 等格式）
   const PANTONE_TO_HEX: Record<string, string> = {
     "300 c": "#005EB8", "300c": "#005EB8",
+    "293 c": "#0046AD", "293c": "#0046AD",
+    "112 c": "#9C8412", "112c": "#9C8412",
     "185 c": "#E4002B", "185c": "#E4002B",
     "process blue c": "#0085CA", "process blue": "#0085CA",
     "reflex blue c": "#001489", "reflex blue": "#001489",
@@ -555,6 +574,12 @@ export default function App() {
       || PANTONE_TO_HEX[key.replace(/^(pantone|p)\s*/i, "").trim()]
       || PANTONE_TO_HEX[key.replace(/^(pantone|p)\s*/i, "").replace(/\s/g, "")];
     if (pantoneHex) return hexToRgb(pantoneHex);
+    const numC = t.match(/(?:pantone|p)?\s*(\d+)\s*c\b/i);
+    if (numC && Object.keys(pantoneCoatedMap).length > 0) {
+      const n = numC[1];
+      const coatedHex = pantoneCoatedMap[`${n}-c`] || pantoneCoatedMap[`${n}c`];
+      if (coatedHex) return hexToRgb(coatedHex.startsWith("#") ? coatedHex : `#${coatedHex}`);
+    }
     return null;
   };
 
