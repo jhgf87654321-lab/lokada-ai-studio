@@ -560,7 +560,7 @@ export default function App() {
     return `rgb(${r},${g},${b})`;
   };
 
-  // 从 mpfff.icu 导出的颜色文本（hex/rgb/pantone 编号）解析为 CSS 颜色值
+  // 从 mpfff.icu 导出的颜色文本（hex/rgb/pantone 编号/名称）解析为 CSS 颜色值
   const parseColorFromText = (text: string): string | null => {
     if (!text?.trim()) return null;
     const t = text.trim();
@@ -569,11 +569,20 @@ export default function App() {
     const rgb = t.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/);
     if (rgb) return `rgb(${rgb[1]},${rgb[2]},${rgb[3]})`;
     const key = t.toLowerCase().replace(/\s+/g, " ").trim();
-    const pantoneHex = PANTONE_TO_HEX[key]
-      || PANTONE_TO_HEX[key.replace(/\s/g, "")]
-      || PANTONE_TO_HEX[key.replace(/^(pantone|p)\s*/i, "").trim()]
-      || PANTONE_TO_HEX[key.replace(/^(pantone|p)\s*/i, "").replace(/\s/g, "")];
-    if (pantoneHex) return hexToRgb(pantoneHex);
+    const keyNoPrefix = key.replace(/^(pantone|p)\s*/i, "").trim();
+    const keysToTry = [
+      key,
+      key.replace(/\s/g, ""),
+      keyNoPrefix,
+      keyNoPrefix.replace(/\s/g, ""),
+      key.replace(/\s+c\s*$/i, "").trim(),
+      key.replace(/\s*[-–(].*$/, "").trim(),
+      key.replace(/\s+c\s*$/i, "").replace(/\s/g, "").trim(),
+    ];
+    for (const k of keysToTry) {
+      const pantoneHex = PANTONE_TO_HEX[k];
+      if (pantoneHex) return hexToRgb(pantoneHex);
+    }
     const numC = t.match(/(?:pantone|p)?\s*(\d+)\s*c\b/i);
     if (numC && Object.keys(pantoneCoatedMap).length > 0) {
       const n = numC[1];
