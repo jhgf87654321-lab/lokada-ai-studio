@@ -507,22 +507,54 @@ export default function App() {
     }
   };
 
-  // 从 mpfff.icu 导出的颜色文本（hex/rgb）解析为 CSS 颜色值
+  // Pantone 编号/名称 → hex 映射（mpfff.icu 常用 + 常见 Pantone C）
+  const PANTONE_TO_HEX: Record<string, string> = {
+    "300 c": "#005EB8", "300c": "#005EB8",
+    "185 c": "#E4002B", "185c": "#E4002B",
+    "process blue c": "#0085CA", "process blue": "#0085CA",
+    "reflex blue c": "#001489", "reflex blue": "#001489",
+    "yellow c": "#FEDD00", "yellow": "#FEDD00",
+    "warm red c": "#F9423A", "warm red": "#F9423A",
+    "green c": "#00AB84", "green": "#00AB84",
+    "orange 021 c": "#FE5000", "orange 021": "#FE5000", "021 c": "#FE5000",
+    "purple c": "#BB29BB", "purple": "#BB29BB",
+    "nebulas blue": "#2D62A3", "nebulasblue": "#2D62A3",
+    "hawaiian surf": "#00A3B5", "hawaiiansurf": "#00A3B5",
+    "iris bloom": "#5B5FAA", "irisbloom": "#5B5FAA",
+    "indigo bunting": "#3D7AB5", "indigobunting": "#3D7AB5",
+    "blue horizon": "#5D8DC4", "bluehorizon": "#5D8DC4",
+    "fjord blue": "#006994", "fjordblue": "#006994",
+    "gray blue": "#6B8E9F", "grayblue": "#6B8E9F",
+    "301 c": "#005293", "302 c": "#003D7A", "286 c": "#0033A0",
+    "187 c": "#C8102E", "194 c": "#862633", "199 c": "#E40046",
+    "7481 c": "#009639", "7482 c": "#2E7D32", "7483 c": "#4CAF50",
+    "116 c": "#FFCD00", "109 c": "#FFD100", "1235 c": "#FFC72C",
+    "2767 c": "#512D6D", "2685 c": "#6C1D87", "2597 c": "#6E1B62",
+  };
+
+  const hexToRgb = (hex: string): string | null => {
+    const m = hex.slice(1).match(hex.length <= 4 ? /^(.)(.)(.)$/ : /^(..)(..)(..)/);
+    if (!m) return null;
+    const r = hex.length <= 4 ? parseInt(m[1] + m[1], 16) : parseInt(m[1], 16);
+    const g = hex.length <= 4 ? parseInt(m[2] + m[2], 16) : parseInt(m[2], 16);
+    const b = hex.length <= 4 ? parseInt(m[3] + m[3], 16) : parseInt(m[3], 16);
+    return `rgb(${r},${g},${b})`;
+  };
+
+  // 从 mpfff.icu 导出的颜色文本（hex/rgb/pantone 编号）解析为 CSS 颜色值
   const parseColorFromText = (text: string): string | null => {
     if (!text?.trim()) return null;
     const t = text.trim();
     const hex = t.match(/#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b/)?.[0];
-    if (hex) {
-      const m = hex.slice(1).match(hex.length <= 4 ? /^(.)(.)(.)$/ : /^(..)(..)(..)/);
-      if (m) {
-        const r = hex.length <= 4 ? parseInt(m[1] + m[1], 16) : parseInt(m[1], 16);
-        const g = hex.length <= 4 ? parseInt(m[2] + m[2], 16) : parseInt(m[2], 16);
-        const b = hex.length <= 4 ? parseInt(m[3] + m[3], 16) : parseInt(m[3], 16);
-        return `rgb(${r},${g},${b})`;
-      }
-    }
+    if (hex) return hexToRgb(hex);
     const rgb = t.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/);
     if (rgb) return `rgb(${rgb[1]},${rgb[2]},${rgb[3]})`;
+    const key = t.toLowerCase().replace(/\s+/g, " ").trim();
+    const pantoneHex = PANTONE_TO_HEX[key]
+      || PANTONE_TO_HEX[key.replace(/\s/g, "")]
+      || PANTONE_TO_HEX[key.replace(/^(pantone|p)\s*/i, "").trim()]
+      || PANTONE_TO_HEX[key.replace(/^(pantone|p)\s*/i, "").replace(/\s/g, "")];
+    if (pantoneHex) return hexToRgb(pantoneHex);
     return null;
   };
 
