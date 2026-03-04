@@ -854,11 +854,21 @@ export default function App() {
                       </div>
                       <div className="flex flex-wrap gap-4 items-center">
                         {colors.map((color) => {
-                          const isSelected = activePart === "top" ? topColor === color.value : bottomColor === color.value;
+                          const isSelected = color.value === null
+                            ? (activePart === "top" ? topColor === null && !topColorText : bottomColor === null && !bottomColorText)
+                            : (activePart === "top" ? topColor === color.value : bottomColor === color.value);
                           return (
                             <button
                               key={color.name}
-                              onClick={() => (activePart === "top" ? setTopColor(color.value) : setBottomColor(color.value))}
+                              onClick={() => {
+                                if (activePart === "top") {
+                                  setTopColor(color.value);
+                                  setTopColorText("");
+                                } else {
+                                  setBottomColor(color.value);
+                                  setBottomColorText("");
+                                }
+                              }}
                               title={color.name}
                               className={`w-11 h-11 rounded-full transition-all flex items-center justify-center relative border border-white/10 ${color.class} ${isSelected ? "ring-4 ring-white/30 ring-offset-4 ring-offset-[#050505] scale-110 border-white/40" : "hover:scale-110 hover:border-white/30"}`}
                             >
