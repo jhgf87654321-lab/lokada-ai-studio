@@ -507,6 +507,25 @@ export default function App() {
     }
   };
 
+  // 从 mpfff.icu 导出的颜色文本（hex/rgb）解析为 CSS 颜色值
+  const parseColorFromText = (text: string): string | null => {
+    if (!text?.trim()) return null;
+    const t = text.trim();
+    const hex = t.match(/#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b/)?.[0];
+    if (hex) {
+      const m = hex.slice(1).match(hex.length <= 4 ? /^(.)(.)(.)$/ : /^(..)(..)(..)/);
+      if (m) {
+        const r = hex.length <= 4 ? parseInt(m[1] + m[1], 16) : parseInt(m[1], 16);
+        const g = hex.length <= 4 ? parseInt(m[2] + m[2], 16) : parseInt(m[2], 16);
+        const b = hex.length <= 4 ? parseInt(m[3] + m[3], 16) : parseInt(m[3], 16);
+        return `rgb(${r},${g},${b})`;
+      }
+    }
+    const rgb = t.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/);
+    if (rgb) return `rgb(${rgb[1]},${rgb[2]},${rgb[3]})`;
+    return null;
+  };
+
   const colors = [
     { name: "原始", value: null, class: "bg-transparent border border-white/10" },
     { name: "黑色", value: "黑", class: "bg-black" },
@@ -801,7 +820,7 @@ export default function App() {
                           </button>
                         )}
                       </div>
-                      <div className="flex flex-wrap gap-4">
+                      <div className="flex flex-wrap gap-4 items-center">
                         {colors.map((color) => {
                           const isSelected = activePart === "top" ? topColor === color.value : bottomColor === color.value;
                           return (
@@ -817,19 +836,46 @@ export default function App() {
                             </button>
                           );
                         })}
+                        {(() => {
+                          const customText = activePart === "top" ? topColorText : bottomColorText;
+                          const rgb = parseColorFromText(customText);
+                          if (!rgb) return null;
+                          const isCustomSelected = activePart === "top" ? !!topColorText && !topColor : !!bottomColorText && !bottomColor;
+                          return (
+                            <button
+                              key="mpfff"
+                              onClick={() => {
+                                if (activePart === "top") {
+                                  setTopColor(null);
+                                  setTopColorText(customText);
+                                } else {
+                                  setBottomColor(null);
+                                  setBottomColorText(customText);
+                                }
+                              }}
+                              title={`mpfff.icu: ${rgb}`}
+                              className={`w-11 h-11 rounded-full transition-all flex items-center justify-center relative border border-white/10 shrink-0 ${isCustomSelected ? "ring-4 ring-white/30 ring-offset-4 ring-offset-[#050505] scale-110 border-white/40" : "hover:scale-110 hover:border-white/30"}`}
+                              style={{ backgroundColor: rgb }}
+                            >
+                              {isCustomSelected && (
+                                <Check className="w-4 h-4 relative z-10 text-white drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]" />
+                              )}
+                            </button>
+                          );
+                        })()}
                       </div>
                       <div className="mt-4 space-y-2 text-[11px] text-white/50">
                         <p>
-                          高级配色请到{" "}
+                          更多颜色请到{" "}
                           <a
                             href="https://mpfff.icu"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-brand underline"
                           >
-                            mpfff.icu
-                          </a>{" "}
-                          选色，复制后点击下方按钮即可自动填入。
+                            pantone 对照选色
+                          </a>
+                          ，复制后点击下方按钮即可自动填入。
                         </p>
                         <div className="flex gap-2">
                           <button
