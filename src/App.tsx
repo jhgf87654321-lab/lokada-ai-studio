@@ -558,14 +558,6 @@ export default function App() {
     return null;
   };
 
-  const getColorSwatch = (value: string | null, text: string): { class?: string; style?: React.CSSProperties } => {
-    const c = colors.find((x) => x.value === value);
-    if (c) return { class: c.class };
-    const rgb = parseColorFromText(text);
-    if (rgb) return { style: { backgroundColor: rgb } };
-    return {};
-  };
-
   const colors = [
     { name: "原始", value: null, class: "bg-transparent border border-white/10" },
     { name: "黑色", value: "黑", class: "bg-black" },
@@ -579,6 +571,14 @@ export default function App() {
     { name: "棕色", value: "棕", class: "bg-amber-800" },
     { name: "灰色", value: "灰", class: "bg-gray-500" },
   ];
+
+  const getColorSwatch = (value: string | null, text: string): { class?: string; style?: React.CSSProperties } => {
+    const rgb = parseColorFromText(text);
+    if (rgb) return { style: { backgroundColor: rgb } };
+    const c = colors.find((x) => x.value === value);
+    if (c) return { class: c.class };
+    return {};
+  };
 
   if (loading) {
     return (
@@ -889,7 +889,6 @@ export default function App() {
                         {(() => {
                           const customText = activePart === "top" ? topColorText : bottomColorText;
                           const rgb = parseColorFromText(customText);
-                          if (!rgb) return null;
                           const isCustomSelected = activePart === "top" ? !!topColorText && !topColor : !!bottomColorText && !bottomColor;
                           return (
                             <button
@@ -903,13 +902,14 @@ export default function App() {
                                   setBottomColorText(customText);
                                 }
                               }}
-                              title={`mpfff.icu: ${rgb}`}
-                              className={`w-11 h-11 rounded-full transition-all flex items-center justify-center relative border border-white/10 shrink-0 ${isCustomSelected ? "ring-4 ring-white/30 ring-offset-4 ring-offset-[#050505] scale-110 border-white/40" : "hover:scale-110 hover:border-white/30"}`}
-                              style={{ backgroundColor: rgb }}
+                              title={rgb ? `mpfff.icu: ${rgb}` : "输入 hex/Pantone 添加自定义颜色"}
+                              className={`w-11 h-11 rounded-full transition-all flex items-center justify-center relative border border-white/10 shrink-0 ${isCustomSelected ? "ring-4 ring-white/30 ring-offset-4 ring-offset-[#050505] scale-110 border-white/40" : "hover:scale-110 hover:border-white/30"} ${!rgb ? "border-dashed bg-white/5" : ""}`}
+                              style={rgb ? { backgroundColor: rgb } : undefined}
                             >
-                              {isCustomSelected && (
+                              {rgb && isCustomSelected && (
                                 <Check className="w-4 h-4 relative z-10 text-white drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]" />
                               )}
+                              {!rgb && <span className="text-white/40 text-[10px] font-bold">+</span>}
                             </button>
                           );
                         })()}
