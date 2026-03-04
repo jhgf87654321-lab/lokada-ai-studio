@@ -558,6 +558,14 @@ export default function App() {
     return null;
   };
 
+  const getColorSwatch = (value: string | null, text: string): { class?: string; style?: React.CSSProperties } => {
+    const c = colors.find((x) => x.value === value);
+    if (c) return { class: c.class };
+    const rgb = parseColorFromText(text);
+    if (rgb) return { style: { backgroundColor: rgb } };
+    return {};
+  };
+
   const colors = [
     { name: "原始", value: null, class: "bg-transparent border border-white/10" },
     { name: "黑色", value: "黑", class: "bg-black" },
@@ -961,20 +969,28 @@ export default function App() {
                       <button onClick={() => setActivePart("top")} className={`text-left transition-all duration-300 rounded-[1.5rem] p-5 border shadow-[0_0_20px_rgba(255,255,255,0.05)] ${activePart === "top" ? "bg-brand border-brand shadow-[0_0_30px_rgba(106,56,176,0.4)] scale-[1.02]" : "bg-white/10 border-white/20 hover:bg-white/15"}`}>
                         <p className={`text-[14px] font-black uppercase tracking-[0.2em] font-display mb-2 ${activePart === "top" ? "text-white" : "text-white/60"}`}>已选上装</p>
                         <p className="text-xs font-black font-display truncate text-white">{topMaterial?.name || topCustomMaterial || "未选择"}</p>
-                        {(topColor || topColorText) && (
-                          <span className="text-[9px] font-bold uppercase mt-1 block tracking-widest text-white/80">
-                            颜色: {topColorText || topColor}
-                          </span>
-                        )}
+                        {(topColor || topColorText) && (() => {
+                          const swatch = getColorSwatch(topColor, topColorText);
+                          return (
+                            <span className="text-[9px] font-bold uppercase mt-1 flex items-center gap-1.5 tracking-widest text-white/80">
+                              <span className={`w-3 h-3 rounded-full shrink-0 border border-white/20 ${swatch.class || ""}`} style={swatch.style} />
+                              颜色: {topColorText || topColor}
+                            </span>
+                          );
+                        })()}
                       </button>
                       <button onClick={() => setActivePart("bottom")} className={`text-left transition-all duration-300 rounded-[1.5rem] p-5 border shadow-[0_0_20px_rgba(255,255,255,0.05)] ${activePart === "bottom" ? "bg-brand border-brand shadow-[0_0_30px_rgba(106,56,176,0.4)] scale-[1.02]" : "bg-white/10 border-white/20 hover:bg-white/15"}`}>
                         <p className={`text-[14px] font-black uppercase tracking-[0.2em] font-display mb-2 ${activePart === "bottom" ? "text-white" : "text-white/60"}`}>已选下装</p>
                         <p className="text-xs font-black font-display truncate text-white">{bottomMaterial?.name || bottomCustomMaterial || "未选择"}</p>
-                        {(bottomColor || bottomColorText) && (
-                          <span className="text-[9px] font-bold uppercase mt-1 block tracking-widest text-white/80">
-                            颜色: {bottomColorText || bottomColor}
-                          </span>
-                        )}
+                        {(bottomColor || bottomColorText) && (() => {
+                          const swatch = getColorSwatch(bottomColor, bottomColorText);
+                          return (
+                            <span className="text-[9px] font-bold uppercase mt-1 flex items-center gap-1.5 tracking-widest text-white/80">
+                              <span className={`w-3 h-3 rounded-full shrink-0 border border-white/20 ${swatch.class || ""}`} style={swatch.style} />
+                              颜色: {bottomColorText || bottomColor}
+                            </span>
+                          );
+                        })()}
                       </button>
                     </div>
 
