@@ -97,6 +97,7 @@ export default function App() {
   const [resultImageLoadError, setResultImageLoadError] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pantoneCoatedMap, setPantoneCoatedMap] = useState<Record<string, string>>({});
+  const [pantoneNameMap, setPantoneNameMap] = useState<Record<string, string>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);          // 原图上传
   const referenceInputRef = useRef<HTMLInputElement>(null);     // 参考图上传
@@ -169,6 +170,48 @@ export default function App() {
           m[key.replace("-", "")] = hex;
         });
         setPantoneCoatedMap(m);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 加载 Pantone 名称 → hex 数据集（用于识别如 "rose red" 这类名称）
+  useEffect(() => {
+    const normalizeName = (s: string) =>
+      s
+        .toLowerCase()
+        .trim()
+        .replace(/[_\s]+/g, "-")
+        .replace(/[^a-z0-9-]/g, "")
+        .replace(/-+/g, "-");
+
+    fetch("https://raw.githubusercontent.com/Margaret2/pantone-colors/master/pantone-colors.json")
+      .then((r) => r.json())
+      .then((data: any) => {
+        const m: Record<string, string> = {};
+
+        // 形态 1：{ names: [...], values: [...] }（并行数组）
+        if (Array.isArray(data?.names) && Array.isArray(data?.values) && data.names.length === data.values.length) {
+          data.names.forEach((name: string, i: number) => {
+            const hex = String(data.values[i] || "").trim();
+            if (!name || !hex) return;
+            const k = normalizeName(name);
+            if (k) m[k] = hex.startsWith("#") ? hex : `#${hex}`;
+          });
+        }
+
+        // 形态 2：{ colors: [{ name, hex }...] } 或直接数组
+        const arr = Array.isArray(data) ? data : Array.isArray(data?.colors) ? data.colors : null;
+        if (arr) {
+          arr.forEach((item: any) => {
+            const name = String(item?.name || item?.pantone || item?.title || "").trim();
+            const hex = String(item?.hex || item?.value || "").trim();
+            if (!name || !hex) return;
+            const k = normalizeName(name);
+            if (k) m[k] = hex.startsWith("#") ? hex : `#${hex}`;
+          });
+        }
+
+        if (Object.keys(m).length > 0) setPantoneNameMap(m);
       })
       .catch(() => {});
   }, []);
@@ -583,6 +626,22 @@ export default function App() {
       const pantoneHex = PANTONE_TO_HEX[k];
       if (pantoneHex) return hexToRgb(pantoneHex);
     }
+
+    // 名称类（如 "rose red"）：用名称数据集查找
+    if (Object.keys(pantoneNameMap).length > 0) {
+      const normalize = (s: string) =>
+        s
+          .toLowerCase()
+          .trim()
+          .replace(/[_\s]+/g, "-")
+          .replace(/[^a-z0-9-]/g, "")
+          .replace(/-+/g, "-");
+      const k1 = normalize(t);
+      const k2 = normalize(key);
+      const nameHex = pantoneNameMap[k1] || pantoneNameMap[k2] || pantoneNameMap[k1.replace(/-/g, "")] || pantoneNameMap[k2.replace(/-/g, "")];
+      if (nameHex) return hexToRgb(nameHex);
+    }
+
     const numC = t.match(/(?:pantone|p)?\s*(\d+)\s*c\b/i);
     if (numC && Object.keys(pantoneCoatedMap).length > 0) {
       const n = numC[1];
