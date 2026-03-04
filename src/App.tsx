@@ -86,9 +86,11 @@ export default function App() {
   const [topMaterial, setTopMaterial] = useState<Material | null>(null);
   const [topCustomMaterial, setTopCustomMaterial] = useState<string | null>(null);
   const [topColor, setTopColor] = useState<string | null>(null);
+  const [topColorText, setTopColorText] = useState<string>("");
   const [bottomMaterial, setBottomMaterial] = useState<Material | null>(null);
   const [bottomCustomMaterial, setBottomCustomMaterial] = useState<string | null>(null);
   const [bottomColor, setBottomColor] = useState<string | null>(null);
+  const [bottomColorText, setBottomColorText] = useState<string>("");
   const [activePart, setActivePart] = useState<"top" | "bottom">("top");
   const [replacing, setReplacing] = useState(false);
   const [resultImage, setResultImage] = useState<string | null>(null);
@@ -132,6 +134,27 @@ export default function App() {
       }, 50);
     }
   }, [resultImage]);
+
+  // 监听 mpfff.icu postMessage，自动接收颜色值（若对方支持）
+  const activePartRef = useRef(activePart);
+  useEffect(() => {
+    activePartRef.current = activePart;
+  }, [activePart]);
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.origin !== "https://mpfff.icu") return;
+      const d = e.data;
+      if (!d || typeof d !== "object") return;
+      const hex = d.hex || d.color || d.hexCode;
+      const name = d.name || d.pantone;
+      const val = [hex, name].filter(Boolean).join(" ");
+      if (!val) return;
+      if (activePartRef.current === "top") setTopColorText(val);
+      else setBottomColorText(val);
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
 
   // Check login status and fetch materials on mount
   useEffect(() => {
@@ -409,8 +432,10 @@ export default function App() {
     try {
       setResultImageLoadError(false);
       const parts: string[] = [];
-      if (topPrompt) parts.push(`上装${topColor ? topColor + "色" : ""}${topPrompt}`);
-      if (bottomPrompt) parts.push(`下装${bottomColor ? bottomColor + "色" : ""}${bottomPrompt}`);
+      const topColorLabel = topColorText || topColor || "";
+      const bottomColorLabel = bottomColorText || bottomColor || "";
+      if (topPrompt) parts.push(`上装${topColorLabel ? `（${topColorLabel}）` : ""}${topPrompt}`);
+      if (bottomPrompt) parts.push(`下装${bottomColorLabel ? `（${bottomColorLabel}）` : ""}${bottomPrompt}`);
       const materialPrompt = parts.join("，") || "替换材质";
       const result = await replaceMaterial(selectedImage, materialPrompt, undefined);
       setResultImage(result);
@@ -759,8 +784,21 @@ export default function App() {
                           <p className="text-[14px] font-black uppercase tracking-[0.3em] text-brand font-display drop-shadow-[0_0_10px_rgba(106,56,176,0.8)] mb-2">步骤 04</p>
                           <p className="text-lg font-black text-white uppercase tracking-[0.2em] font-display">调色盘 ({activePart === "top" ? "上装" : "下装"})</p>
                         </div>
-                        {((activePart === "top" && topColor) || (activePart === "bottom" && bottomColor)) && (
-                          <button onClick={() => (activePart === "top" ? setTopColor(null) : setBottomColor(null))} className="text-[10px] font-black text-brand uppercase font-display">重置</button>
+                        {((activePart === "top" && (topColor || topColorText)) || (activePart === "bottom" && (bottomColor || bottomColorText))) && (
+                          <button
+                            onClick={() => {
+                              if (activePart === "top") {
+                                setTopColor(null);
+                                setTopColorText("");
+                              } else {
+                                setBottomColor(null);
+                                setBottomColorText("");
+                              }
+                            }}
+                            className="text-[10px] font-black text-brand uppercase font-display"
+                          >
+                            重置
+                          </button>
                         )}
                       </div>
                       <div className="flex flex-wrap gap-4">
@@ -780,18 +818,75 @@ export default function App() {
                           );
                         })}
                       </div>
+                      <div className="mt-4 space-y-2 text-[11px] text-white/50">
+                        <p>
+                          高级配色请到{" "}
+                          <a
+                            href="https://mpfff.icu"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-brand underline"
+                          >
+                            mpfff.icu
+                          </a>{" "}
+                          选色，复制后点击下方按钮即可自动填入。
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const text = await navigator.clipboard.readText();
+                                const hex = text.match(/#[0-9A-Fa-f]{3,8}\b/)?.[0];
+                                const pantone = text.match(/(?:Pantone|P\s*\d+\s*[A-Z]?|Nebulas Blue|Hawaiian Surf|Iris Bloom|Indigo Bunting|Blue Horizon|Fjord Blue|Gray Blue|[\u4e00-\u9fa5]+\s*(?:Blue|Green|Red|Orange|Purple|Pink|Yellow|Gray|Brown|Black|White)[^\n]*)/)?.[0]?.trim();
+                                const color = hex || pantone || text.trim().slice(0, 80);
+                                if (color) {
+                                  if (activePart === "top") setTopColorText(color);
+                                  else setBottomColorText(color);
+                                } else {
+                                  setError("剪贴板中未检测到颜色值");
+                                }
+                              } catch {
+                                setError("需要粘贴权限，请先在输入框中粘贴颜色");
+                              }
+                            }}
+                            className="shrink-0 px-4 py-2 rounded-lg bg-brand/80 hover:bg-brand text-white font-bold text-[11px] uppercase"
+                          >
+                            自动从剪贴板获取
+                          </button>
+                          <input
+                            type="text"
+                            value={activePart === "top" ? topColorText : bottomColorText}
+                            onChange={(e) =>
+                              activePart === "top"
+                                ? setTopColorText(e.target.value)
+                                : setBottomColorText(e.target.value)
+                            }
+                            placeholder="或手动输入颜色描述 / 十六进制"
+                            className="flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-brand"
+                          />
+                        </div>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                       <button onClick={() => setActivePart("top")} className={`text-left transition-all duration-300 rounded-[1.5rem] p-5 border shadow-[0_0_20px_rgba(255,255,255,0.05)] ${activePart === "top" ? "bg-brand border-brand shadow-[0_0_30px_rgba(106,56,176,0.4)] scale-[1.02]" : "bg-white/10 border-white/20 hover:bg-white/15"}`}>
                         <p className={`text-[14px] font-black uppercase tracking-[0.2em] font-display mb-2 ${activePart === "top" ? "text-white" : "text-white/60"}`}>已选上装</p>
                         <p className="text-xs font-black font-display truncate text-white">{topMaterial?.name || topCustomMaterial || "未选择"}</p>
-                        {topColor && <span className="text-[9px] font-bold uppercase mt-1 block tracking-widest text-white/80">颜色: {topColor}</span>}
+                        {(topColor || topColorText) && (
+                          <span className="text-[9px] font-bold uppercase mt-1 block tracking-widest text-white/80">
+                            颜色: {topColorText || topColor}
+                          </span>
+                        )}
                       </button>
                       <button onClick={() => setActivePart("bottom")} className={`text-left transition-all duration-300 rounded-[1.5rem] p-5 border shadow-[0_0_20px_rgba(255,255,255,0.05)] ${activePart === "bottom" ? "bg-brand border-brand shadow-[0_0_30px_rgba(106,56,176,0.4)] scale-[1.02]" : "bg-white/10 border-white/20 hover:bg-white/15"}`}>
                         <p className={`text-[14px] font-black uppercase tracking-[0.2em] font-display mb-2 ${activePart === "bottom" ? "text-white" : "text-white/60"}`}>已选下装</p>
                         <p className="text-xs font-black font-display truncate text-white">{bottomMaterial?.name || bottomCustomMaterial || "未选择"}</p>
-                        {bottomColor && <span className="text-[9px] font-bold uppercase mt-1 block tracking-widest text-white/80">颜色: {bottomColor}</span>}
+                        {(bottomColor || bottomColorText) && (
+                          <span className="text-[9px] font-bold uppercase mt-1 block tracking-widest text-white/80">
+                            颜色: {bottomColorText || bottomColor}
+                          </span>
+                        )}
                       </button>
                     </div>
 
