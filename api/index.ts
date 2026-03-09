@@ -8,6 +8,7 @@ import COS from "cos-nodejs-sdk-v5";
 import dotenv from "dotenv";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
+import Stripe from "stripe";
 dotenv.config();
 
 const isVercel = Boolean(process.env.VERCEL);
@@ -18,12 +19,10 @@ const app = express();
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-user-id");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
-
-app.use(express.json({ limit: "50mb" }));
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,6 +86,36 @@ const COS_BASE_URL = `https://${Bucket}.cos.${Region}.myqcloud.com/`;
 const MATERIALS_META_KEY = "materials/metadata.json";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
+const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "";
+const stripePriceId = process.env.PRICE_ID || "";
+const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" }) : null;
+
+type BillingPayment = {
+  id: string; // Stripe checkout.session.id
+  createdAt: string;
+  amount: number;
+  currency: string;
+  status: string;
+  creditsAdded: number;
+};
+type BillingUsage = {
+  id: string;
+  createdAt: string;
+  type: "generate";
+  creditsUsed: number;
+  meta?: { prompt?: string };
+};
+type BillingWallet = {
+  version: number;
+  userId: string;
+  balance: number;
+  payments: BillingPayment[];
+  usage: BillingUsage[];
+  updatedAt: string;
+};
+
 function putObject(params: any): Promise<any> {
   return new Promise((resolve, reject) => { cos.putObject(params, (err, data) => err ? reject(err) : resolve(data)); });
 }
@@ -109,6 +138,54 @@ async function getObjectText(key: string): Promise<string | null> {
       }
     );
   });
+}
+
+async function objectExists(key: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    cos.headObject({ Bucket, Region, Key: key }, (err) => resolve(!err));
+  });
+}
+
+async function loadWallet(userId: string): Promise<BillingWallet> {
+  const key = `billing/wallets/${userId}.json`;
+  const text = await getObjectText(key);
+  if (!text) {
+    const now = new Date().toISOString();
+    return { version: 1, userId, balance: 0, payments: [], usage: [], updatedAt: now };
+  }
+  try {
+    const parsed = JSON.parse(text) as BillingWallet;
+    return {
+      version: 1,
+      userId,
+      balance: typeof parsed.balance === "number" ? parsed.balance : 0,
+      payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+      usage: Array.isArray(parsed.usage) ? parsed.usage : [],
+      updatedAt: parsed.updatedAt || new Date().toISOString(),
+    };
+  } catch {
+    const now = new Date().toISOString();
+    return { version: 1, userId, balance: 0, payments: [], usage: [], updatedAt: now };
+  }
+}
+
+async function saveWallet(wallet: BillingWallet): Promise<void> {
+  const key = `billing/wallets/${wallet.userId}.json`;
+  const body = JSON.stringify({ ...wallet, version: 1, updatedAt: new Date().toISOString() }, null, 2);
+  await putObject({
+    Bucket,
+    Region,
+    Key: key,
+    Body: body,
+    ContentLength: Buffer.byteLength(body),
+    ContentType: "application/json",
+  });
+}
+
+function requireUserId(req: express.Request): string | null {
+  const header = (req.headers["x-user-id"] as string | undefined)?.trim();
+  const body = (req as any).body?.userId ? String((req as any).body.userId).trim() : "";
+  return header || body || null;
 }
 
 type MaterialMeta = {
@@ -180,10 +257,111 @@ async function saveMaterialsMeta(file: MaterialsFile): Promise<void> {
 
 async function startServer() {
   const PORT = parseInt(String(process.env.PORT || 3001), 10);
+  // Stripe Webhook：必须使用 raw body，否则签名校验会失败（必须在 json middleware 之前注册）
+  const webhookHandler: express.RequestHandler = async (req, res) => {
+    if (!stripe || !stripeWebhookSecret) return res.status(500).send("Stripe not configured");
+    const sig = req.headers["stripe-signature"];
+    if (!sig || typeof sig !== "string") return res.status(400).send("Missing stripe-signature");
+    let event: any;
+    try {
+      event = stripe.webhooks.constructEvent(req.body as any, sig, stripeWebhookSecret);
+    } catch (err: any) {
+      return res.status(400).send(`Webhook Error: ${err?.message || "invalid signature"}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as any;
+      const sessionId = session.id;
+      const userId = (session.client_reference_id || (session.metadata as any)?.userId || "").toString();
+      const paid = session.payment_status === "paid" || session.status === "complete";
+      if (userId && paid) {
+        const markerKey = `billing/payments/${sessionId}.json`;
+        const already = await objectExists(markerKey);
+        if (!already) {
+          const creditsToAdd = 200;
+          const wallet = await loadWallet(userId);
+          wallet.balance += creditsToAdd;
+          wallet.payments.unshift({
+            id: sessionId,
+            createdAt: new Date((session.created || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+            amount: typeof session.amount_total === "number" ? session.amount_total : 1000,
+            currency: (session.currency || "usd").toUpperCase(),
+            status: session.payment_status || session.status || "completed",
+            creditsAdded: creditsToAdd,
+          });
+          await saveWallet(wallet);
+          await putObject({
+            Bucket,
+            Region,
+            Key: markerKey,
+            Body: JSON.stringify({ processedAt: new Date().toISOString(), userId, sessionId }, null, 2),
+            ContentLength: Buffer.byteLength(JSON.stringify({ processedAt: new Date().toISOString(), userId, sessionId })),
+            ContentType: "application/json",
+          });
+        }
+      }
+    }
+
+    res.json({ received: true });
+  };
+
+  // 按用户要求：回调路径为 /api/vebhook；同时兼容常见拼写 /api/webhook
+  app.post("/api/vebhook", express.raw({ type: "application/json" }), webhookHandler);
+  app.post("/api/webhook", express.raw({ type: "application/json" }), webhookHandler);
+
   app.use(express.json({ limit: "50mb" }));
   app.use(express.raw({ type: "application/octet-stream", limit: "50mb" }));
 
   app.get("/api/health", (_, res) => res.json({ status: "ok", timestamp: Date.now() }));
+
+  // Stripe：创建 Checkout Session（需要登录态，前端传 x-user-id）
+  app.post("/api/checkout/create-session", async (req, res) => {
+    if (!stripe || !stripePublishableKey) {
+      return res.status(500).json({ error: "Stripe not configured" });
+    }
+    const userId = requireUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const origin = req.headers.origin ? String(req.headers.origin) : process.env.APP_URL || "http://localhost:3000";
+      const lineItem: any = stripePriceId.startsWith("price_")
+        ? { price: stripePriceId, quantity: 1 }
+        : {
+            price_data: {
+              currency: "usd",
+              ...(stripePriceId.startsWith("prod_") ? { product: stripePriceId } : { product_data: { name: "200 积分" } }),
+              unit_amount: 1000,
+            },
+            quantity: 1,
+          };
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [lineItem],
+        allow_promotion_codes: true,
+        client_reference_id: userId,
+        metadata: { userId },
+        success_url: `${origin}/billing?success=1&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/billing?canceled=1`,
+      });
+      res.json({ id: session.id, url: session.url, publishableKey: stripePublishableKey });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to create checkout session" });
+    }
+  });
+
+  // Billing：查询余额 + 支付历史 + 积分使用情况
+  app.get("/api/billing", async (req, res) => {
+    const userId = requireUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const wallet = await loadWallet(userId);
+    res.json({
+      userId,
+      balance: wallet.balance,
+      payments: wallet.payments,
+      usage: wallet.usage,
+      updatedAt: wallet.updatedAt,
+    });
+  });
 
   // 前台使用：从 COS 中读取材质元数据并返回列表
   app.get("/api/materials", async (_, res) => {
@@ -385,6 +563,15 @@ async function startServer() {
     }
     if (!gemini) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
 
+    // 生图扣积分：需要登录用户（前端传 x-user-id）；每次生图消耗 1 积分
+    const userId = requireUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const wallet = await loadWallet(userId);
+    const cost = 1;
+    if (wallet.balance < cost) {
+      return res.status(402).json({ error: "Insufficient credits", balance: wallet.balance });
+    }
+
     try {
       const parts: any[] = [];
 
@@ -429,6 +616,16 @@ async function startServer() {
       for (const part of resultParts) {
         if ((part as any).inlineData) {
           const data = (part as any).inlineData.data as string;
+          // 只在成功返回图片后扣减积分并记录使用情况
+          wallet.balance -= cost;
+          wallet.usage.unshift({
+            id: `usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            createdAt: new Date().toISOString(),
+            type: "generate",
+            creditsUsed: cost,
+            meta: { prompt: String(prompt || "").slice(0, 140) },
+          });
+          await saveWallet(wallet);
           return res.json({ image: `data:image/png;base64,${data}` });
         }
       }

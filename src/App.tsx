@@ -52,11 +52,14 @@ interface AdminMaterialRow {
 export default function App() {
   const MAX_IMAGE_UPLOAD_MB = 10;
   const MAX_IMAGE_UPLOAD_BYTES = MAX_IMAGE_UPLOAD_MB * 1024 * 1024;
-  const [view, setView] = useState<"studio" | "generate" | "admin">("studio");
+  const [view, setView] = useState<"studio" | "generate" | "admin" | "billing">("studio");
   const [materials, setMaterials] = useState<Material[]>([]);
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
+  const [billingData, setBillingData] = useState<{ balance: number; payments: any[]; usage: any[] } | null>(null);
 
   // Login form state
   const [loginMethod, setLoginMethod] = useState<"phone" | "email">("phone");
@@ -116,6 +119,22 @@ export default function App() {
       }
     }
   }, []);
+
+  // 简单路由：支持 /billing
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncFromPath = () => {
+      if (window.location.pathname === "/billing") setView("billing");
+    };
+    syncFromPath();
+    window.addEventListener("popstate", syncFromPath);
+    return () => window.removeEventListener("popstate", syncFromPath);
+  }, []);
+
+  // Billing 页：进入时自动拉取数据
+  useEffect(() => {
+    if (view === "billing" && user?.userId) fetchBilling();
+  }, [view, user?.userId]);
 
   // 当切换到 AI 生图视图时，在手机端自动滚动到生图区域
   useEffect(() => {
@@ -366,6 +385,52 @@ export default function App() {
     }
   }
 
+  async function fetchBilling() {
+    if (!user?.userId) return;
+    setBillingLoading(true);
+    setBillingError(null);
+    try {
+      const res = await fetch("/api/billing", { headers: { "x-user-id": user.userId } });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+      const data = JSON.parse(text);
+      setBillingData({
+        balance: Number(data.balance || 0),
+        payments: Array.isArray(data.payments) ? data.payments : [],
+        usage: Array.isArray(data.usage) ? data.usage : [],
+      });
+    } catch (e: any) {
+      setBillingError(e?.message || "加载 Billing 失败");
+      setBillingData(null);
+    } finally {
+      setBillingLoading(false);
+    }
+  }
+
+  async function handleRecharge() {
+    if (!user?.userId) {
+      setShowLogin(true);
+      return;
+    }
+    try {
+      const res = await fetch("/api/checkout/create-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": user.userId },
+        body: JSON.stringify({ userId: user.userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "创建支付失败");
+      const url = data.url;
+      if (url) {
+        window.location.href = url;
+      } else {
+        throw new Error("未获取到支付链接");
+      }
+    } catch (e: any) {
+      alert(e?.message || "充值失败");
+    }
+  }
+
   async function handleLogout() {
     try {
       const { logout } = await import("./services/cloudbaseAuth");
@@ -423,15 +488,20 @@ export default function App() {
 
   async function handleGenerate() {
     if (!prompt.trim()) return;
+    if (!user?.userId) {
+      alert("请先登录后再生图（需要积分）");
+      return;
+    }
     setGenerating(true);
     setGeneratedImage(null);
     setTaskId(null);
     try {
-      const imageUrl = await generateImage(prompt, uploadedImage || undefined, referenceImage || undefined);
+      const imageUrl = await generateImage(prompt, uploadedImage || undefined, referenceImage || undefined, user.userId);
       setGeneratedImage(imageUrl);
     } catch (error: any) {
       console.error("Generate error:", error);
       alert(`生成失败: ${error.message}`);
+    } finally {
       setGenerating(false);
     }
   }
@@ -710,7 +780,10 @@ export default function App() {
           <h1 className="text-xl font-black tracking-tight font-display uppercase">LOKADA AI Studio</h1>
           <div className="flex gap-2 ml-4">
             <button
-              onClick={() => setView("studio")}
+              onClick={() => {
+                setView("studio");
+                if (typeof window !== "undefined") window.history.pushState({}, "", "/");
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors font-display tracking-[0.15em] uppercase ${
                 view === "studio"
                   ? "bg-brand text-white shadow-md shadow-brand/40"
@@ -720,7 +793,10 @@ export default function App() {
               材质库
             </button>
             <button
-              onClick={() => setView("generate")}
+              onClick={() => {
+                setView("generate");
+                if (typeof window !== "undefined") window.history.pushState({}, "", "/");
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors font-display tracking-[0.15em] uppercase ${
                 view === "generate"
                   ? "bg-brand text-white shadow-md shadow-brand/40"
@@ -729,6 +805,21 @@ export default function App() {
             >
               AI 生图
             </button>
+            {user && (
+              <button
+                onClick={() => {
+                  setView("billing");
+                  if (typeof window !== "undefined") window.history.pushState({}, "", "/billing");
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors font-display tracking-[0.15em] uppercase ${
+                  view === "billing"
+                    ? "bg-white text-black shadow-md"
+                    : "bg-white/5 text-white/60 hover:bg-white/10"
+                }`}
+              >
+                Billing
+              </button>
+            )}
             {isAdmin && (
               <button
                 onClick={() => setView("admin")}
@@ -744,8 +835,24 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-4">
+          <button
+            onClick={() => {
+              if (typeof window !== "undefined") {
+                window.location.href = "https://lokada.xyz";
+              }
+            }}
+            className="px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors font-display text-xs uppercase tracking-[0.15em]"
+          >
+            回到首页
+          </button>
           {user ? (
             <>
+              <button
+                onClick={handleRecharge}
+                className="px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-dark transition-colors font-display text-xs uppercase tracking-[0.15em] shadow-lg shadow-brand/40"
+              >
+                充值
+              </button>
               <span className="text-xs text-white/60 font-medium">
                 {user.phone || user.email || user.nickname || user.userId}
               </span>
@@ -754,13 +861,21 @@ export default function App() {
               </button>
             </>
           ) : (
-            <button
-              onClick={() => setShowLogin(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-dark transition-colors font-display text-xs uppercase tracking-[0.15em] shadow-lg shadow-brand/40"
-            >
-              <User className="w-4 h-4" />
-              登录
-            </button>
+            <>
+              <button
+                onClick={handleRecharge}
+                className="px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/15 transition-colors font-display text-xs uppercase tracking-[0.15em]"
+              >
+                充值
+              </button>
+              <button
+                onClick={() => setShowLogin(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-dark transition-colors font-display text-xs uppercase tracking-[0.15em] shadow-lg shadow-brand/40"
+              >
+                <User className="w-4 h-4" />
+                登录
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -768,7 +883,109 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-auto px-4 py-6 md:p-8">
         <div className="max-w-7xl mx-auto h-full relative z-10">
-        {view === "admin" && isAdmin ? (
+        {view === "billing" ? (
+          <section className="bg-white/5 backdrop-blur-2xl rounded-[3rem] p-8 md:p-10 shadow-2xl border border-white/10">
+            {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("success") === "1" && (
+              <div className="mb-6 p-4 rounded-xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-200 text-sm">
+                充值成功！200 积分已到账。
+              </div>
+            )}
+            <div className="flex items-start justify-between gap-4 mb-8">
+              <div>
+                <h2 className="text-2xl md:text-3xl font-black font-display uppercase tracking-tight">Billing</h2>
+                <p className="text-sm text-white/50 mt-1">查看余额、支付历史与积分使用情况</p>
+              </div>
+              <button
+                onClick={handleRecharge}
+                className="px-5 py-3 rounded-xl bg-brand text-white font-black uppercase font-display text-xs tracking-wider shadow-lg shadow-brand/40 hover:scale-[1.02] transition-all"
+              >
+                充值（$10 = 200积分）
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+                <p className="text-xs text-white/50 font-bold uppercase tracking-[0.2em] font-display">积分余额</p>
+                <p className="mt-2 text-3xl font-black font-display">{billingData?.balance ?? 0}</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-6 md:col-span-2">
+                <p className="text-xs text-white/50 font-bold uppercase tracking-[0.2em] font-display">提示</p>
+                <p className="mt-2 text-sm text-white/70">
+                  每次生图消耗 1 积分；充值成功后会自动到账（Stripe webhook）。
+                </p>
+              </div>
+            </div>
+
+            {billingLoading && <div className="text-sm text-white/60">加载中...</div>}
+            {billingError && <div className="text-sm text-red-400">{billingError}</div>}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-6 overflow-hidden">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-black uppercase font-display tracking-wider">支付历史</h3>
+                  <button onClick={fetchBilling} className="text-xs text-brand font-bold uppercase font-display">刷新</button>
+                </div>
+                <div className="overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="text-white/50">
+                      <tr className="text-left">
+                        <th className="py-2 pr-3">时间</th>
+                        <th className="py-2 pr-3">金额</th>
+                        <th className="py-2 pr-3">积分</th>
+                        <th className="py-2 pr-3">状态</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-white/80">
+                      {(billingData?.payments || []).map((p: any) => (
+                        <tr key={p.id} className="border-t border-white/10">
+                          <td className="py-2 pr-3 whitespace-nowrap">{String(p.createdAt || "").slice(0, 19).replace("T", " ")}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{p.currency ? `${p.currency} ` : ""}{Number(p.amount || 0) / 100}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">+{p.creditsAdded || 0}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{p.status || "-"}</td>
+                        </tr>
+                      ))}
+                      {(!billingData?.payments || billingData.payments.length === 0) && (
+                        <tr><td className="py-3 text-white/40" colSpan={4}>暂无记录</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-6 overflow-hidden">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-black uppercase font-display tracking-wider">积分使用情况</h3>
+                  <button onClick={fetchBilling} className="text-xs text-brand font-bold uppercase font-display">刷新</button>
+                </div>
+                <div className="overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="text-white/50">
+                      <tr className="text-left">
+                        <th className="py-2 pr-3">时间</th>
+                        <th className="py-2 pr-3">类型</th>
+                        <th className="py-2 pr-3">消耗</th>
+                        <th className="py-2 pr-3">备注</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-white/80">
+                      {(billingData?.usage || []).map((u: any) => (
+                        <tr key={u.id} className="border-t border-white/10">
+                          <td className="py-2 pr-3 whitespace-nowrap">{String(u.createdAt || "").slice(0, 19).replace("T", " ")}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{u.type || "-"}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">-{u.creditsUsed || 0}</td>
+                          <td className="py-2 pr-3 truncate max-w-[260px]">{u?.meta?.prompt || "-"}</td>
+                        </tr>
+                      ))}
+                      {(!billingData?.usage || billingData.usage.length === 0) && (
+                        <tr><td className="py-3 text-white/40" colSpan={4}>暂无记录</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : view === "admin" && isAdmin ? (
           <AdminMaterials />
         ) : view === "studio" ? (
           <>

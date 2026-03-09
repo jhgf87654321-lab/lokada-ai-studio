@@ -78,16 +78,21 @@ export async function replaceMaterial(
 export async function generateImage(
   prompt: string,
   originalImage?: string,
-  referenceImage?: string
+  referenceImage?: string,
+  userId?: string
 ): Promise<string> {
   const payloadOriginal = originalImage ? await compressImageForUpload(originalImage) : undefined;
   const payloadReference = referenceImage ? await compressImageForUpload(referenceImage) : undefined;
   const response = await fetch("/api/generate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, originalImage: payloadOriginal, referenceImage: payloadReference }),
+    headers: { "Content-Type": "application/json", ...(userId ? { "x-user-id": userId } : {}) },
+    body: JSON.stringify({ prompt, originalImage: payloadOriginal, referenceImage: payloadReference, userId }),
   });
   if (!response.ok) {
+    if (response.status === 402) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error === "Insufficient credits" ? "积分不足，请先充值" : "积分不足或未登录");
+    }
     throw new Error(`Generate failed: ${response.statusText}`);
   }
   const data = await response.json();
