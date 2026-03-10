@@ -90,7 +90,10 @@ const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
 const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "";
 const stripePriceId = process.env.PRICE_ID || "";
 const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
-const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" }) : null;
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: "2026-02-25.clover" }) : null;
+
+// 生图积分开关：默认关闭（免费），需要启用时设置环境变量 ENABLE_GENERATE_CREDITS=1
+const ENABLE_GENERATE_CREDITS = String(process.env.ENABLE_GENERATE_CREDITS || "") === "1";
 
 type BillingPayment = {
   id: string; // Stripe checkout.session.id
@@ -563,13 +566,21 @@ async function startServer() {
     }
     if (!gemini) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
 
-    // 生图扣积分：需要登录用户（前端传 x-user-id）；每次生图消耗 1 积分
+    /**
+     * 备份：生图扣积分逻辑（默认关闭，保持代码以便随时恢复）
+     * - 启用方式：设置环境变量 ENABLE_GENERATE_CREDITS=1
+     * - 行为：需要登录（x-user-id），每次生图消耗 1 积分，不足则返回 402
+     */
     const userId = requireUserId(req);
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
-    const wallet = await loadWallet(userId);
     const cost = 1;
-    if (wallet.balance < cost) {
-      return res.status(402).json({ error: "Insufficient credits", balance: wallet.balance });
+    const shouldChargeCredits = ENABLE_GENERATE_CREDITS;
+    let wallet: BillingWallet | null = null;
+    if (shouldChargeCredits) {
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      wallet = await loadWallet(userId);
+      if (wallet.balance < cost) {
+        return res.status(402).json({ error: "Insufficient credits", balance: wallet.balance });
+      }
     }
 
     try {
@@ -616,16 +627,18 @@ async function startServer() {
       for (const part of resultParts) {
         if ((part as any).inlineData) {
           const data = (part as any).inlineData.data as string;
-          // 只在成功返回图片后扣减积分并记录使用情况
-          wallet.balance -= cost;
-          wallet.usage.unshift({
-            id: `usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            createdAt: new Date().toISOString(),
-            type: "generate",
-            creditsUsed: cost,
-            meta: { prompt: String(prompt || "").slice(0, 140) },
-          });
-          await saveWallet(wallet);
+          // 只在成功返回图片后扣减积分并记录使用情况（默认关闭）
+          if (shouldChargeCredits && wallet) {
+            wallet.balance -= cost;
+            wallet.usage.unshift({
+              id: `usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              createdAt: new Date().toISOString(),
+              type: "generate",
+              creditsUsed: cost,
+              meta: { prompt: String(prompt || "").slice(0, 140) },
+            });
+            await saveWallet(wallet);
+          }
           return res.json({ image: `data:image/png;base64,${data}` });
         }
       }

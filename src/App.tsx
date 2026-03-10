@@ -60,6 +60,8 @@ export default function App() {
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
   const [billingData, setBillingData] = useState<{ balance: number; payments: any[]; usage: any[] } | null>(null);
+  // 生图登录/积分开关（默认关闭：任何人可用；需要恢复时将 VITE_REQUIRE_LOGIN_FOR_GENERATE=1）
+  const REQUIRE_LOGIN_FOR_GENERATE = (import.meta as any).env.VITE_REQUIRE_LOGIN_FOR_GENERATE === "1";
 
   // Login form state
   const [loginMethod, setLoginMethod] = useState<"phone" | "email">("phone");
@@ -488,7 +490,8 @@ export default function App() {
 
   async function handleGenerate() {
     if (!prompt.trim()) return;
-    if (!user?.userId) {
+    // 备份：启用积分制时，前端可恢复“必须登录”拦截
+    if (REQUIRE_LOGIN_FOR_GENERATE && !user?.userId) {
       alert("请先登录后再生图（需要积分）");
       return;
     }
@@ -496,7 +499,7 @@ export default function App() {
     setGeneratedImage(null);
     setTaskId(null);
     try {
-      const imageUrl = await generateImage(prompt, uploadedImage || undefined, referenceImage || undefined, user.userId);
+      const imageUrl = await generateImage(prompt, uploadedImage || undefined, referenceImage || undefined, user?.userId);
       setGeneratedImage(imageUrl);
     } catch (error: any) {
       console.error("Generate error:", error);
